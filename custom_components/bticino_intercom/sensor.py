@@ -14,8 +14,8 @@ from .const import (
     DOMAIN,
     DATA_LAST_EVENT,
     EVENT_TYPE_INCOMING_CALL,
-    EVENT_TYPE_ANSWERED_ELSEWHERE,  # Added
-    EVENT_TYPE_TERMINATED,  # Added
+    EVENT_TYPE_ANSWERED_ELSEWHERE,
+    EVENT_TYPE_TERMINATED,
 )
 from .coordinator import BticinoIntercomCoordinator
 
@@ -28,13 +28,36 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the BTicino sensor platform."""
-    # Get the coordinator from hass.data
     coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id][
         "coordinator"
     ]
 
-    # Create the sensor entity, linked to the config entry, not a specific device
-    sensors_to_add = [BticinoLastEventSensor(coordinator)]
+    # Find the main bridge module (e.g., BNC1) to attach the sensor to.
+    bridge_module_id = None
+    bridge_module_data = None
+    # Add other potential bridge types if necessary
+    bridge_types = ["BNC1"]
+    if coordinator.data and "modules" in coordinator.data:
+        for module_id, module_data in coordinator.data["modules"].items():
+            if module_data.get("type") in bridge_types and not module_data.get(
+                "bridge"
+            ):
+                bridge_module_id = module_id
+                bridge_module_data = module_data
+                _LOGGER.debug("Found bridge module for sensor: %s", bridge_module_id)
+                break  # Use the first one found
+
+    if not bridge_module_id:
+        _LOGGER.warning(
+            "Could not identify a bridge module (e.g., BNC1). "
+            "Last Event sensor will not be linked to a specific device."
+        )
+        # Optionally, could still create the sensor but without device info,
+        # or link it to the config entry as before as a fallback.
+        # For now, we'll only create it if we find the bridge.
+        return
+
+    sensors_to_add = [BticinoLastEventSensor(coordinator, bridge_module_id)]
     async_add_entities(sensors_to_add)
 
 
@@ -50,15 +73,18 @@ class BticinoLastEventSensor(
         "last_event"  # Corresponds to strings.json key for sensor name
     )
 
-    def __init__(self, coordinator: BticinoIntercomCoordinator) -> None:
+    def __init__(
+        self, coordinator: BticinoIntercomCoordinator, bridge_module_id: str
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        # Link to the config entry device (created implicitly by HA)
+        # Link to the bridge device
         self._attr_device_info = {
-            "identifiers": {(DOMAIN, coordinator.entry.entry_id)},
+            "identifiers": {(DOMAIN, bridge_module_id)},
+            # Name etc. will be inherited from the device registry entry for the bridge
         }
-        # Set unique ID based on entry_id and sensor type
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_last_event"
+        # Set unique ID based on bridge_id and sensor type
+        self._attr_unique_id = f"{bridge_module_id}_last_event"
         # Initialize state from coordinator data immediately
         self._update_state()
 
@@ -157,9 +183,8 @@ class BticinoLastEventSensor(
         if state == EVENT_TYPE_INCOMING_CALL:
             return "mdi:phone-incoming"
         elif state == EVENT_TYPE_ANSWERED_ELSEWHERE:
-            return "mdi:phone-cancel"  # Or mdi:phone-check if preferred
+            return "mdi:phone-cancel"
         elif state == EVENT_TYPE_TERMINATED:
             return "mdi:phone-hangup"
-        # Add icons for other event types here if needed
-        # Example: elif state == "accepted_call": return "mdi:phone-check"
+        # Add other icons based on event types if needed
         return "mdi:history"  # Default icon for other/unknown states

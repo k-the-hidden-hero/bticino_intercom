@@ -11,8 +11,8 @@ from homeassistant import config_entries
 from homeassistant.const import (
     CONF_USERNAME,
     CONF_PASSWORD,
-    CONF_CLIENT_ID,
-    CONF_CLIENT_SECRET,
+    # CONF_CLIENT_ID, # Removed
+    # CONF_CLIENT_SECRET, # Removed
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
@@ -26,7 +26,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
-        # Removed CONF_CLIENT_ID and CONF_CLIENT_SECRET
     }
 )
 
@@ -37,8 +36,7 @@ from pybticino import AsyncAccount
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> AuthHandler:
     """Validate the user input allows us to connect and return the auth handler."""
     session = async_get_clientsession(hass)
-    # AuthHandler gets client_id and client_secret internally
-    auth_handler = AuthHandler(
+    auth_handler = AuthHandler(  # client_id/secret handled internally by library
         username=data[CONF_USERNAME],
         password=data[CONF_PASSWORD],
         session=session,

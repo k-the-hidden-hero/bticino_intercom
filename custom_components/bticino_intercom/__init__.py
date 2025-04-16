@@ -18,8 +18,7 @@ from homeassistant.const import (
     CONF_PASSWORD,
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
-    # EVENT_HOMEASSISTANT_STOP, # Removed
-    EVENT_HOMEASSISTANT_START,  # Re-add START event
+    EVENT_HOMEASSISTANT_START,
 )
 from homeassistant.core import (
     HomeAssistant,

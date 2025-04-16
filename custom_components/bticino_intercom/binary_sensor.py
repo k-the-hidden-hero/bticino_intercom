@@ -7,9 +7,7 @@ from contextlib import suppress  # Import suppress for async_will_remove_from_ha
 
 from pybticino import AsyncAccount
 
-# Import correct exception if needed, and correct model path
-from pybticino.exceptions import ApiError  # Assuming ApiError might be needed later
-from pybticino.models import Module
+# Unused imports removed
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
