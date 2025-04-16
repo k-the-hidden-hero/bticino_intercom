@@ -1,13 +1,13 @@
 {
   "domain": "bticino_intercom",
   "name": "BTicino Classe 100X/300X",
-  "documentation": "https://github.com/thekoma/ha-bticino",
-  "issue_tracker": "https://github.com/thekoma/ha-bticino/issues",
   "codeowners": ["@thekoma"],
   "config_flow": true,
-  "iot_class": "cloud_push",
-  "version": "0.1.0",
-  "requirements": ["pybticino>=1.0"],
   "dependencies": [],
-  "loggers": ["pybticino"]
+  "documentation": "https://github.com/thekoma/ha-bticino",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/thekoma/ha-bticino/issues",
+  "loggers": ["pybticino"],
+  "requirements": ["pybticino>=1.0"],
+  "version": "0.1.0"
 }
