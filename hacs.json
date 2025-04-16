@@ -1,0 +1,5 @@
+{
+  "name": "BTicino Intercom",
+  "render_readme": true,
+  "domains": ["binary_sensor", "lock", "sensor"]
+}
