@@ -1,0 +1,52 @@
+# .github/workflows/release.yaml
+name: Create GitHub Release 🚀
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger workflow on tag push (e.g., v1.0.0, v0.1.0)
+
+jobs:
+  release:
+    name: Create Release 📦
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Allow the action to create releases
+
+    steps:
+      - name: Checkout code 🛎️
+        uses: actions/checkout@v4
+
+      - name: Get version from tag 🏷️
+        id: get_version
+        # Extract the version number from the tag (removes 'refs/tags/')
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Package integration into zip 🤐
+        run: |
+          # Navigate to the directory containing the integration
+          cd ${{ github.workspace }}/custom_components/bticino_intercom
+          # Create a zip file in the root workspace directory
+          # Exclude hidden files/folders (like .git, .github, .vscode) and __pycache__
+          zip -r ${{ github.workspace }}/bticino_intercom-${{ env.VERSION }}.zip . -x ".*" -x "__pycache__/*"
+
+      - name: Create GitHub Release ✨
+        uses: softprops/action-gh-release@v2
+        with:
+          # The GITHUB_TOKEN is automatically provided by GitHub Actions
+          # The tag_name is automatically inferred from the triggering tag
+          name: Release ${{ env.VERSION }}
+          body: |
+            🎉 Release ${{ env.VERSION }} of the BTicino Intercom integration!
+
+            **Installation:**
+            *   **HACS:** Recommended. Add the repository if you haven't already.
+            *   **Manual:** Download the `bticino_intercom-${{ env.VERSION }}.zip` file below and extract the `bticino_intercom` folder into your `<config>/custom_components` directory.
+
+            **Changes:**
+            *(Consider adding release notes here automatically in the future if desired)*
+            See commit history for changes since the last release.
+          draft: false # Set to true to create a draft release first
+          prerelease: false # Set to true if this is a pre-release (e.g., beta)
+          files: | # List of files to attach to the release
+            ${{ github.workspace }}/bticino_intercom-${{ env.VERSION }}.zip
