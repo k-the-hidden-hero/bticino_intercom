@@ -57,17 +57,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         # Data is initialized by super().__init__ calling update_method
         self.entry = entry
         # Ensure self.data is initialized as a dictionary by the parent class
+        # It will be populated by _async_update_data
         self.data: dict[str, Any] = {"homes": {}, "modules": {}}
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the API and register devices."""
-        _LOGGER.debug("Fetching data for BTicino Intercom")
+        _LOGGER.debug("Coordinator: Starting data update")
         # Start with the previous data if available, otherwise empty dicts
+        # Make a deep copy to avoid modifying the previous state directly during processing
         current_data = {
-            "homes": self.data.get("homes", {}).copy(),
-            "modules": {
-                k: v.copy() for k, v in self.data.get("modules", {}).items()
-            },  # Deep copy modules
+            "homes": {k: v.copy() for k, v in self.data.get("homes", {}).items()},
+            "modules": {k: v.copy() for k, v in self.data.get("modules", {}).items()},
         }
 
         try:
@@ -87,9 +87,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     # Update existing module data or add new module from topology
                     # Preserve existing status keys if not present in topology data
                     existing_module_data = current_data["modules"].get(module_id, {})
-                    existing_module_data.update(
-                        module_data
-                    )  # Merge topology data first
+                    # Important: Update existing dict, don't overwrite with just topology data
+                    existing_module_data.update(module_data)
                     current_data["modules"][module_id] = existing_module_data
                     processed_modules[module_id] = current_data["modules"][module_id]
 
@@ -99,7 +98,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                         "manufacturer": "BTicino",
                         "model": module_data.get("type"),
                         "name": module_data.get("name"),
-                        # "sw_version": module_data.get("firmware_revision"), # Example
+                        # Use firmware_name if available, fallback to firmware_revision
+                        "sw_version": str(
+                            module_data.get("firmware_name")
+                            or module_data.get("firmware_revision")
+                        ),
+                        "hw_version": (
+                            str(module_data.get("hardware_version"))
+                            if module_data.get("hardware_version")
+                            else None
+                        ),
                     }
                     bridge_id = module_data.get("bridge")
                     if bridge_id:
@@ -122,7 +130,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 # Process status update directly into current_data["modules"]
                 self._process_status_update(status_data, current_data["modules"])
 
-            _LOGGER.debug("Data fetched successfully")
+            _LOGGER.debug("Data update finished. New data: %s", current_data)
             # Return the updated data structure which will become self.data
             return current_data
 
@@ -138,6 +146,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self, status_data: dict[str, Any], modules_target: dict[str, Any]
     ) -> bool:
         """Process data from homestatus endpoint and update the modules_target dict."""
+        _LOGGER.debug("Processing status update data: %s", status_data)
         updated = False
         modules_status = status_data.get("body", {}).get("home", {}).get("modules", [])
         if not modules_status:
@@ -154,15 +163,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 # Only update keys present in the status update
                 for key, value in module_status_update.items():
                     if key != "id" and current_module_data.get(key) != value:
+                        _LOGGER.debug(
+                            "Updating module %s key '%s' from %s to %s via status",
+                            module_id,
+                            key,
+                            current_module_data.get(key),
+                            value,
+                        )
                         current_module_data[key] = value
                         module_updated = True
                 if module_updated:
-                    _LOGGER.debug(
-                        "Updated module %s via status: %s",
-                        module_id,
-                        current_module_data,
-                    )
-                    updated = True
+                    updated = True  # Mark overall update if any module changed
             else:
                 _LOGGER.warning(
                     "Module %s found in status but not in topology.", module_id

@@ -89,6 +89,36 @@ class BticinoCallSensor(BinarySensorEntity):
             via_device=(DOMAIN, bridge_module_id) if bridge_module_id else None,
             # sw_version=module_data.get("firmware_version"),
         )
+        # Initialize extra attributes
+        self._update_extra_attributes()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return device specific state attributes."""
+        return self._attr_extra_state_attributes
+
+    @callback
+    def _update_extra_attributes(self) -> None:
+        """Update extra attributes from coordinator data."""
+        if not self.coordinator.data or "modules" not in self.coordinator.data:
+            self._attr_extra_state_attributes = None
+            return
+        module_data = self.coordinator.data["modules"].get(self._module_id)
+        if not module_data:
+            self._attr_extra_state_attributes = None
+            return
+
+        attrs = {
+            "module_id": self._module_id,
+            "bridge_id": module_data.get("bridge"),
+            "variant": module_data.get("variant"),
+            "firmware_revision": module_data.get("firmware_revision"),
+            "reachable": module_data.get("reachable"),
+            # Add other relevant attributes from module_data if needed
+        }
+        self._attr_extra_state_attributes = {
+            k: v for k, v in attrs.items() if v is not None
+        }
 
     @callback
     def _handle_call_received(self, state: bool, module_id: str | None) -> None:
@@ -134,6 +164,10 @@ class BticinoCallSensor(BinarySensorEntity):
             async_dispatcher_connect(
                 self.hass, SIGNAL_CALL_RECEIVED, self._handle_call_received
             )
+        )
+        # Also update extra attributes when coordinator updates
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._update_extra_attributes)
         )
 
     async def async_will_remove_from_hass(self) -> None:
