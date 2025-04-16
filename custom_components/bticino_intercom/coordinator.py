@@ -25,9 +25,13 @@ from .const import (
     DOMAIN,
     SIGNAL_CALL_RECEIVED,
     EVENT_TYPE_INCOMING_CALL,
+    EVENT_TYPE_ANSWERED_ELSEWHERE,  # Added
+    EVENT_TYPE_TERMINATED,  # Added
     PUSH_TYPE_WEBSOCKET_CONNECTION,
-    EVENT_LOGBOOK_INCOMING_CALL,  # Added Logbook event
-    DATA_LAST_EVENT,  # Added data key
+    EVENT_LOGBOOK_INCOMING_CALL,
+    EVENT_LOGBOOK_ANSWERED_ELSEWHERE,  # Added
+    EVENT_LOGBOOK_TERMINATED,  # Added
+    DATA_LAST_EVENT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -211,71 +215,147 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
     # _process_status_update is now integrated into _async_update_data
 
-    def _process_websocket_event(self, event_data: dict[str, Any]) -> bool:
-        """Process event data from websocket and update self.data['modules']."""
+    def _process_websocket_event(self, message: dict[str, Any]) -> bool:
+        """Process event data from websocket and update self.data."""
         updated = False
-        event_type = event_data.get("event_type") or event_data.get("push_type")
-        module_id = event_data.get("module_id") or event_data.get("device_id")
+        push_type = message.get("push_type")
+        extra_params = message.get("extra_params", {})
+        session_data = extra_params.get("data", {}).get("session_description", {})
+
+        # Extract module/device ID - prioritize specific module from call, fallback to device_id
+        module_id = session_data.get("module_id") or extra_params.get("device_id")
 
         if not module_id:
-            _LOGGER.debug("Websocket event without module/device ID: %s", event_data)
-            return False
-
-        # Use self.data directly as it's managed by DataUpdateCoordinator
-        if not self.data or "modules" not in self.data:
-            _LOGGER.warning("Coordinator data not ready for websocket event.")
-            return False
-
-        if module_id not in self.data["modules"]:
-            _LOGGER.warning(
-                "Websocket event for unknown module %s: %s", module_id, event_data
+            _LOGGER.debug(
+                "Websocket event without relevant module/device ID: %s", message
             )
             return False
 
-        current_module_data = self.data["modules"][module_id]
+        # Check if module exists in coordinator data (use self.data)
+        if module_id not in self.data.get("modules", {}):
+            _LOGGER.warning(
+                "Websocket event for unknown module %s: %s", module_id, message
+            )
+            # Optionally try the device_id if module_id wasn't the primary one found
+            if module_id != extra_params.get("device_id") and extra_params.get(
+                "device_id"
+            ) in self.data.get("modules", {}):
+                module_id = extra_params.get("device_id")
+                _LOGGER.debug("Falling back to device_id %s", module_id)
+            else:
+                return False  # Skip if neither ID is known
+
+        current_module_data = self.data["modules"][module_id]  # Use self.data
         module_updated = False
 
-        # --- Handle Incoming Call ---
-        if event_type == "outdoor" and "subevents" in event_data:
-            for subevent in event_data.get("subevents", []):
-                if subevent.get("type") == EVENT_TYPE_INCOMING_CALL:
-                    _LOGGER.info("Incoming call detected for module %s", module_id)
-                    async_dispatcher_send(
-                        self.hass, SIGNAL_CALL_RECEIVED, True, module_id
-                    )
-                    # Fire Logbook event
-                    self.hass.bus.async_fire(
-                        EVENT_LOGBOOK_INCOMING_CALL,
-                        {
-                            "name": f"Incoming Call ({current_module_data.get('name', module_id)})",
-                            "module_id": module_id,
-                        },
-                    )
-                    # Update last event data
-                    self.data[DATA_LAST_EVENT] = {
-                        "type": EVENT_TYPE_INCOMING_CALL,
-                        "timestamp": datetime.now(UTC),
-                        "module_id": module_id,
-                        "module_name": current_module_data.get("name", module_id),
-                    }
-                    _LOGGER.debug(
-                        "Updated last event data: %s", self.data[DATA_LAST_EVENT]
-                    )
-                    updated = True  # Mark that an event occurred
-                    break
+        # --- Handle RTC Events (Call, Rescind, Terminate) ---
+        if push_type == "BNC1-rtc":
+            rtc_event_type = session_data.get(
+                "type"
+            )  # e.g., "call", "rescind", "terminate"
+            calling_module_id = session_data.get(
+                "module_id", module_id
+            )  # Module initiating/involved
+            calling_module_name = (
+                self.data.get("modules", {})
+                .get(calling_module_id, {})
+                .get("name", calling_module_id)
+            )
 
-        # --- Handle Module State Changes ---
-        possible_state_data = event_data.get("data", event_data)
-        if isinstance(possible_state_data, dict):
-            for key, value in possible_state_data.items():
-                if key != "id" and current_module_data.get(key) != value:
-                    _LOGGER.debug(
-                        "Updating module %s key '%s' from %s to %s via websocket",
-                        module_id,
-                        key,
-                        current_module_data.get(key),
-                        value,
-                    )
+            new_event_type = None
+            log_message = None
+
+            if rtc_event_type == "call":
+                new_event_type = EVENT_TYPE_INCOMING_CALL
+                log_message = (
+                    f"Incoming call detected via RTC for module {calling_module_id}"
+                )
+                # Dispatch signal for binary sensor
+                async_dispatcher_send(
+                    self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id
+                )
+                # Fire Logbook event
+                self.hass.bus.async_fire(
+                    EVENT_LOGBOOK_INCOMING_CALL,
+                    {
+                        "name": f"Incoming Call ({calling_module_name})",
+                        "module_id": calling_module_id,
+                    },
+                )
+            elif rtc_event_type == "rescind":
+                new_event_type = EVENT_TYPE_ANSWERED_ELSEWHERE
+                log_message = f"Call answered elsewhere for module {calling_module_id}"
+                # Dispatch signal to turn off binary sensor
+                async_dispatcher_send(
+                    self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id
+                )
+                # Fire Logbook event
+                self.hass.bus.async_fire(
+                    EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
+                    {
+                        "name": f"Call Answered Elsewhere ({calling_module_name})",
+                        "module_id": calling_module_id,
+                    },
+                )
+            elif rtc_event_type == "terminate":
+                new_event_type = EVENT_TYPE_TERMINATED
+                log_message = f"Call terminated/hung up for module {calling_module_id}"
+                # Dispatch signal to turn off binary sensor
+                async_dispatcher_send(
+                    self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id
+                )
+                # Fire Logbook event
+                self.hass.bus.async_fire(
+                    EVENT_LOGBOOK_TERMINATED,
+                    {
+                        "name": f"Call Terminated ({calling_module_name})",
+                        "module_id": calling_module_id,
+                    },
+                )
+            # Add elif for other RTC types like 'accept', 'decline' if needed
+
+            if new_event_type:
+                _LOGGER.info(log_message)
+                # Update last event data
+                self.data[DATA_LAST_EVENT] = {
+                    "type": new_event_type,
+                    "timestamp": datetime.now(UTC),
+                    "module_id": calling_module_id,
+                    "module_name": calling_module_name,
+                    "raw_event": message,
+                }
+                _LOGGER.debug("Updated last event data: %s", self.data[DATA_LAST_EVENT])
+                updated = True
+
+        # --- Handle other specific push_types if necessary ---
+        # elif push_type == "some_other_type":
+        #    ... handle specific state changes ...
+        #    updated = True
+
+        # --- Generic State Update (Only if no specific handler updated data) ---
+        # This is less likely needed now but kept for potential future use
+        # Avoid overwriting data handled by specific handlers above
+        if not updated and isinstance(extra_params.get("data"), dict):
+            possible_state_data = extra_params["data"]
+            # Check only if it's NOT an RTC event we already handled
+            if not (
+                push_type == "BNC1-rtc"
+                and session_data.get("type") in ["call", "rescind", "terminate"]
+            ):
+                for key, value in possible_state_data.items():
+                    # Avoid overwriting complex structures or already handled types
+                    if (
+                        key not in ["session_description", "modules", "type"]
+                        and isinstance(value, (str, int, float, bool))
+                        and current_module_data.get(key) != value
+                    ):
+                        _LOGGER.debug(
+                            "Updating module %s key '%s' from %s to %s via websocket (generic)",
+                            module_id,
+                            key,
+                            current_module_data.get(key),
+                            value,
+                        )
                     current_module_data[key] = value
                     module_updated = True
 
@@ -286,74 +366,25 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
     async def _handle_websocket_message(self, message: dict[str, Any]) -> None:
         """Handle incoming WebSocket messages."""
-        _LOGGER.debug("Received WebSocket message: %s", message)
-        data_updated = False
-        # Process based on message structure
-        if "event_list" in message:
-            for event in message["event_list"]:
-                if self._process_websocket_event(event):
-                    data_updated = True
-        elif "push_type" in message:
-            if self._process_websocket_event(message):
-                data_updated = True
-            # Fetch events only if specifically needed by a push type (like connection trigger)
-            if message.get("push_type") == PUSH_TYPE_WEBSOCKET_CONNECTION:
-                _LOGGER.info(
-                    "Websocket connection trigger received, fetching recent events..."
-                )
-                try:
-                    # Find home_id associated with the device_id
-                    device_id = message.get("extra_params", {}).get("device_id")
-                    home_id = None
-                    # Find the home_id associated with this device_id
-                    for hid, home_data in self.data.get("homes", {}).items():
-                        # Check if device_id is in the modules list for this home
-                        if (
-                            device_id in self.data.get("modules", {})
-                            and self.data["modules"][device_id].get("home_id") == hid
-                        ):
-                            home_id = hid
-                            break
-                        # Fallback check in raw module list if home_id not stored in module data
-                        elif any(
-                            m.get("id") == device_id
-                            for m in home_data.get("modules", [])
-                        ):
-                            home_id = hid
-                            break
-                    # Last resort fallback if not found
-                    if not home_id and self.data.get("homes"):
-                        home_id = next(iter(self.data["homes"]))
+        _LOGGER.debug("Coordinator: _handle_websocket_message called with: %s", message)
+        # Directly call _process_websocket_event with the received message
+        data_updated = self._process_websocket_event(message)
 
-                    if home_id:
-                        events_data = await self.account.async_get_events(
-                            home_id=home_id, size=5
-                        )
-                        if (
-                            events_data
-                            and "body" in events_data
-                            and "home" in events_data["body"]
-                        ):
-                            for event in events_data["body"]["home"].get("events", []):
-                                # Process events, potentially updating data
-                                if self._process_websocket_event(event):
-                                    data_updated = True
-                    else:
-                        _LOGGER.warning(
-                            "Could not determine home_id for device %s to fetch events",
-                            device_id,
-                        )
-                except Exception:
-                    _LOGGER.exception("Error fetching events after websocket trigger")
-        else:  # Fallback for other message structures
-            if self._process_websocket_event(message):
-                data_updated = True
+        # No longer need the complex logic checking event_list or push_type here,
+        # as _process_websocket_event now handles the specific RTC call structure.
+        # We might need to re-add checks if other push types need special handling.
+
+        # Removed the logic that fetches events again on PUSH_TYPE_WEBSOCKET_CONNECTION
 
         if data_updated:
-            # Request a full refresh to fetch latest status and events
+            # Notify listeners immediately with the data updated by the event
             _LOGGER.debug(
-                "WebSocket message processed, requesting coordinator refresh."
+                "WebSocket message processed, notifying listeners immediately."
             )
+            self.async_set_updated_data(self.data)
+
+            # Also request a full refresh to ensure full consistency later
+            _LOGGER.debug("Requesting coordinator refresh after WebSocket update.")
             await self.async_request_refresh()
 
     # Removed async_start_websocket and async_stop_websocket methods

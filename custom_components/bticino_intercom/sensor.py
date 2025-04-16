@@ -14,8 +14,10 @@ from .const import (
     DOMAIN,
     DATA_LAST_EVENT,
     EVENT_TYPE_INCOMING_CALL,
-)  # Import necessary constants
-from .coordinator import BticinoIntercomCoordinator  # Import the coordinator
+    EVENT_TYPE_ANSWERED_ELSEWHERE,  # Added
+    EVENT_TYPE_TERMINATED,  # Added
+)
+from .coordinator import BticinoIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,37 +29,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up the BTicino sensor platform."""
     # Get the coordinator from hass.data
-    if not (entry_data := hass.data.get(DOMAIN, {}).get(entry.entry_id)) or not (
-        coordinator := entry_data.get("coordinator")
-    ):
-        _LOGGER.error("Coordinator not found in hass.data for entry %s", entry.entry_id)
-        return
-    # coordinator type is already BticinoIntercomCoordinator due to assignment expression
-
-    # Find the main intercom module to attach the sensor to.
-    # Heuristic: Look for a module likely to be the main outdoor/indoor unit.
-    # Adjust types based on your specific hardware (e.g., BNDL, BNCX, BNMH).
-    main_module_id = None
-    main_module_data = None
-    module_types_to_check = ["BNC1", "BNMH", "BNDL", "BNCX"]  # Example types
-    for module_id, module_data in coordinator.data.get("modules", {}).items():
-        if module_data.get("type") in module_types_to_check and not module_data.get(
-            "bridge"
-        ):
-            main_module_id = module_id
-            main_module_data = module_data
-            _LOGGER.debug("Found potential main module for sensor: %s", main_module_id)
-            break  # Use the first one found
-
-    if not main_module_id:
-        _LOGGER.warning(
-            "Could not identify a main intercom module to attach the sensor to. "
-            "Sensor will be created without a device link."
-        )
-
-    sensors_to_add = [
-        BticinoLastEventSensor(coordinator, main_module_id, main_module_data)
+    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id][
+        "coordinator"
     ]
+
+    # Create the sensor entity, linked to the config entry, not a specific device
+    sensors_to_add = [BticinoLastEventSensor(coordinator)]
     async_add_entities(sensors_to_add)
 
 
@@ -73,28 +50,15 @@ class BticinoLastEventSensor(
         "last_event"  # Corresponds to strings.json key for sensor name
     )
 
-    def __init__(
-        self,
-        coordinator: BticinoIntercomCoordinator,
-        module_id: str | None,  # Allow None if no main module found
-        module_data: dict | None,  # Allow None
-    ) -> None:
+    def __init__(self, coordinator: BticinoIntercomCoordinator) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._module_id = module_id
+        # Link to the config entry device (created implicitly by HA)
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.entry.entry_id)},
+        }
         # Set unique ID based on entry_id and sensor type
         self._attr_unique_id = f"{coordinator.entry.entry_id}_last_event"
-
-        # Set device info only if a main module was identified
-        if module_id and module_data:
-            self._attr_device_info = {
-                "identifiers": {(DOMAIN, module_id)},
-                # Name, manufacturer, etc., are inherited from the device registry
-            }
-        else:
-            # No specific device link if main module not found
-            self._attr_device_info = None
-
         # Initialize state from coordinator data immediately
         self._update_state()
 
@@ -107,34 +71,95 @@ class BticinoLastEventSensor(
     def _update_state(self) -> None:
         """Update the sensor's state and attributes from coordinator data."""
         last_event_data = self.coordinator.data.get(DATA_LAST_EVENT, {})
-        # State is the type of the last event (e.g., "incoming_call")
+        # Try to get the latest event from DATA_LAST_EVENT (updated by websocket)
+        last_event_data = self.coordinator.data.get(DATA_LAST_EVENT, {})
+
+        # If DATA_LAST_EVENT is empty or old, check events_history (updated by polling)
+        # Define "old" threshold, e.g., 10 minutes
+        event_is_stale = True
+        if last_event_data.get("timestamp"):
+            # Make sure timestamp is datetime object
+            ts = last_event_data["timestamp"]
+            if isinstance(ts, datetime):
+                # Check if timestamp is recent enough (e.g., within last 10 minutes)
+                if (dt_util.utcnow() - ts).total_seconds() < 600:
+                    event_is_stale = False
+            else:
+                _LOGGER.warning(
+                    "Invalid timestamp type in DATA_LAST_EVENT: %s", type(ts)
+                )
+
+        if not last_event_data or event_is_stale:
+            _LOGGER.debug("Last event data is missing or stale, checking history.")
+            history = self.coordinator.data.get("events_history", {}).get(
+                self.coordinator.home_id, []
+            )
+            # Find the most recent relevant event from history (e.g., call related)
+            relevant_event_types = {
+                "incoming_call",
+                "accepted_call",
+                "missed_call",
+                "outdoor",
+            }  # Add more if needed
+            latest_relevant_event = None
+            for event in sorted(history, key=lambda x: x.get("time", 0), reverse=True):
+                event_type = event.get("type")
+                sub_event_type = None
+                if event_type == "outdoor" and "subevents" in event:
+                    # Check subevents for call types
+                    for sub in event.get("subevents", []):
+                        if sub.get("type") in relevant_event_types:
+                            sub_event_type = sub.get("type")
+                            break  # Found relevant subevent
+
+                if event_type in relevant_event_types or sub_event_type:
+                    latest_relevant_event = event
+                    # Use sub_event_type if found, otherwise main event type
+                    last_event_data = {
+                        "type": sub_event_type or event_type,
+                        "timestamp": dt_util.utc_from_timestamp(event.get("time", 0)),
+                        "module_id": event.get("module_id"),
+                        "module_name": self.coordinator.data.get("modules", {})
+                        .get(event.get("module_id"), {})
+                        .get("name"),
+                        "raw_event": event,  # Store raw event for potential attributes
+                    }
+                    _LOGGER.debug("Using event from history: %s", last_event_data)
+                    break  # Stop searching once the latest relevant event is found
+            # If no relevant event found in history either, set state to None or "unknown"
+            if not last_event_data:
+                _LOGGER.debug("No relevant event found in history or recent data.")
+                last_event_data = {"type": None}  # Ensure last_event_data is a dict
+
+        # --- Update state and attributes based on the determined last_event_data ---
         self._attr_native_value = last_event_data.get("type")
 
-        # Attributes store additional details
         attributes = {}
         timestamp = last_event_data.get("timestamp")
         if isinstance(timestamp, datetime):
-            # Ensure timestamp is timezone-aware (it's UTC from coordinator)
-            # Format as ISO string for attribute
-            attributes["timestamp"] = dt_util.as_timestamp(
-                timestamp
-            )  # Store as timestamp
-            attributes["timestamp_iso"] = timestamp.isoformat()  # Also store ISO format
+            attributes["timestamp"] = dt_util.as_timestamp(timestamp)
+            attributes["timestamp_iso"] = timestamp.isoformat()
         else:
             attributes["timestamp"] = None
             attributes["timestamp_iso"] = None
 
-        # Add module info if available in the event data
         attributes["event_module_id"] = last_event_data.get("module_id")
         attributes["event_module_name"] = last_event_data.get("module_name")
+        # Optionally add more details from raw_event if needed
+        attributes["raw_event_details"] = last_event_data.get("raw_event")
 
         self._attr_extra_state_attributes = attributes
 
     @property
     def icon(self) -> str | None:
         """Return the icon to use in the frontend, dynamically."""
-        if self.native_value == EVENT_TYPE_INCOMING_CALL:
+        state = self.native_value
+        if state == EVENT_TYPE_INCOMING_CALL:
             return "mdi:phone-incoming"
-        # Add icons for other event types here if needed in the future
-        # Example: elif self.native_value == "door_unlocked": return "mdi:lock-open"
-        return "mdi:history"  # Default icon if no specific event type matches
+        elif state == EVENT_TYPE_ANSWERED_ELSEWHERE:
+            return "mdi:phone-cancel"  # Or mdi:phone-check if preferred
+        elif state == EVENT_TYPE_TERMINATED:
+            return "mdi:phone-hangup"
+        # Add icons for other event types here if needed
+        # Example: elif state == "accepted_call": return "mdi:phone-check"
+        return "mdi:history"  # Default icon for other/unknown states

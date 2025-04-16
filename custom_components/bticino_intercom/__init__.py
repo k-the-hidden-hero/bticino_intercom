@@ -4,6 +4,7 @@ import asyncio
 import logging
 from functools import partial  # Import partial if needed for callback, but likely not
 import websockets  # Import websockets for exception handling
+from contextlib import suppress  # Import suppress
 
 from pybticino import AuthHandler, AsyncAccount, WebsocketClient
 from pybticino.exceptions import AuthError, ApiError, PyBticinoException
@@ -17,13 +18,13 @@ from homeassistant.const import (
     CONF_PASSWORD,
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
-    # EVENT_HOMEASSISTANT_START, # Removed
     # EVENT_HOMEASSISTANT_STOP, # Removed
+    EVENT_HOMEASSISTANT_START,  # Re-add START event
 )
 from homeassistant.core import (
     HomeAssistant,
-    # Event as HAEvent, # Removed if not used elsewhere
-    # CoreState, # Removed if not used elsewhere
+    Event as HAEvent,  # Re-add HAEvent type hint
+    CoreState,  # Re-add CoreState for check
 )
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -41,8 +42,7 @@ RECONNECT_DELAY = 30  # Seconds to wait before attempting reconnect
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
-
-# Removed START/STOP_LISTENER_REMOVE_KEY
+START_LISTENER_REMOVE_KEY = "start_listener_remove"  # Re-add key for listener removal
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -106,99 +106,175 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # AuthError is already handled above and raises ConfigEntryAuthFailed
         raise ConfigEntryNotReady(f"Failed to fetch initial data: {err}") from err
 
-    # Forward the setup to platforms BEFORE starting the connection manager task
+    # Forward the setup to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # --- WebSocket Connection Manager Task ---
+    # --- Define WebSocket Connection Manager Task and Start Logic ---
     async def _websocket_connection_manager() -> None:
         """Manage the WebSocket connection and reconnection."""
-        _LOGGER.info("Starting WebSocket connection manager loop")
-        while hass.is_running and entry.state == config_entries.ConfigEntryState.LOADED:
-            _LOGGER.debug(
-                "WebSocket manager loop iteration start. Entry state: %s", entry.state
-            )
-            listener_task = None
-            try:
-                # Attempt to connect (includes subscription and starting listener)
-                _LOGGER.info("Attempting WebSocket connect...")
-                await websocket_client.connect()
-                _LOGGER.info("WebSocket connect call successful.")
-
-                # Get the listener task from the client
-                listener_task = websocket_client.get_listener_task()
-                if listener_task:
-                    # Wait for the listener task to complete (indicates disconnection)
-                    _LOGGER.debug("Waiting for WebSocket listener task to complete...")
-                    await listener_task
-                    _LOGGER.info("WebSocket listener task finished cleanly.")
-                else:
-                    _LOGGER.warning(
-                        "Could not get listener task after connect. Treating as disconnection."
-                    )
-
-            except asyncio.CancelledError:
-                _LOGGER.info(
-                    "WebSocket connection manager task cancelled during connect/listen."
-                )
-                break  # Exit the loop if cancelled
-            except AuthError as err:
-                _LOGGER.error(
-                    "WebSocket connection failed due to AuthError: %s. Will retry.", err
-                )
-                # No need to raise ConfigEntryAuthFailed here, let it retry.
-            except (
-                PyBticinoException,
-                websockets.exceptions.WebSocketException,
-            ) as err:
-                _LOGGER.warning(
-                    "WebSocket connection error (%s): %s. Retrying in %d seconds...",
-                    type(err).__name__,
-                    err,
-                    RECONNECT_DELAY,
-                )
-            except Exception as err:
-                # Catch-all for other unexpected errors during connect/listen
-                _LOGGER.exception(
-                    "Unexpected error in WebSocket connection manager during connect/listen. Retrying in %d seconds...",
-                    RECONNECT_DELAY,
-                )
-            finally:
-                # Ensure disconnect is called before retrying or exiting
-                _LOGGER.debug("WebSocket manager: Entering finally block for cleanup.")
-                # Cancel listener task explicitly if it's still somehow running
-                if listener_task and not listener_task.done():
-                    listener_task.cancel()
-                await websocket_client.disconnect()  # disconnect handles its own listener task cancellation too
-
-            # Wait before attempting to reconnect, unless HA is stopping or entry unloaded
-            if (
+        # This function now runs *after* HA has started
+        _LOGGER.info(
+            "Starting WebSocket connection manager task function (triggered by HA start)"
+        )
+        # Outer try block to catch unexpected errors in the loop structure itself
+        try:
+            while (
                 hass.is_running
                 and entry.state == config_entries.ConfigEntryState.LOADED
             ):
                 _LOGGER.debug(
-                    "Waiting %d seconds before WebSocket reconnect attempt...",
-                    RECONNECT_DELAY,
+                    "WebSocket manager loop iteration start. hass.is_running=%s, entry.state=%s",
+                    hass.is_running,
+                    entry.state,
                 )
+                listener_task = None
                 try:
+                    # Attempt to connect (includes subscription and starting listener)
+                    _LOGGER.info(
+                        "Attempting WebSocket connect... (calling websocket_client.connect)"
+                    )
+                    await websocket_client.connect()
+                    _LOGGER.info(
+                        "WebSocket connect call completed without raising immediate exception."
+                    )
+
+                    # Get the listener task from the client
+                    listener_task = websocket_client.get_listener_task()
+                    if listener_task:
+                        # Wait for the listener task to complete (indicates disconnection)
+                        _LOGGER.debug(
+                            "Waiting for WebSocket listener task to complete..."
+                        )
+                        await listener_task
+                        _LOGGER.info("WebSocket listener task finished cleanly.")
+                    else:
+                        _LOGGER.warning(
+                            "Could not get listener task after connect. Treating as disconnection."
+                        )
+
+                except asyncio.CancelledError:
+                    _LOGGER.info(
+                        "WebSocket connection manager task cancelled during connect/listen."
+                    )
+                    # Important: Re-raise CancelledError so the outer try block doesn't treat it as an unexpected error
+                    raise
+                except AuthError as err:
+                    _LOGGER.error(
+                        "WebSocket connection failed due to AuthError: %s. Will retry.",
+                        err,
+                    )
+                    # No need to raise ConfigEntryAuthFailed here, let it retry.
+                except (
+                    PyBticinoException,
+                    websockets.exceptions.WebSocketException,
+                ) as err:
+                    _LOGGER.warning(
+                        "WebSocket connection error (%s): %s. Retrying in %d seconds...",
+                        type(err).__name__,
+                        err,
+                        RECONNECT_DELAY,
+                    )
+                except Exception as err:
+                    # Catch-all for other unexpected errors during connect/listen
+                    _LOGGER.exception(
+                        "Unexpected error in WebSocket connection manager during connect/listen. Retrying in %d seconds...",
+                        RECONNECT_DELAY,
+                    )
+                finally:  # Finally for the inner try (connect/listen attempt)
+                    # Ensure disconnect is called before retrying or exiting this attempt
+                    _LOGGER.debug(
+                        "WebSocket manager: Entering finally block for cleanup after attempt."
+                    )
+                    # Cancel listener task explicitly if it's still somehow running
+                    if listener_task and not listener_task.done():
+                        _LOGGER.debug("Cancelling listener task in finally block.")
+                        listener_task.cancel()
+                        # Wait briefly for cancellation to propagate if needed
+                        with suppress(asyncio.CancelledError):
+                            await listener_task
+                    await websocket_client.disconnect()  # disconnect handles its own listener task cancellation too
+                    _LOGGER.debug("WebSocket client disconnected in finally block.")
+
+                # --- Reconnect Delay Logic ---
+                # This part is outside the inner try...finally, but inside the while loop
+                _LOGGER.debug("WebSocket manager: Reached reconnect delay logic.")
+                if (
+                    hass.is_running
+                    and entry.state == config_entries.ConfigEntryState.LOADED
+                ):
                     _LOGGER.debug(
                         "Waiting %d seconds before WebSocket reconnect attempt...",
                         RECONNECT_DELAY,
                     )
-                    await asyncio.sleep(RECONNECT_DELAY)
-                except asyncio.CancelledError:
+                    try:
+                        await asyncio.sleep(RECONNECT_DELAY)
+                    except asyncio.CancelledError:
+                        _LOGGER.info(
+                            "Reconnect delay interrupted by cancellation. Exiting manager loop."
+                        )
+                        break  # Exit while loop if cancelled during sleep
+                else:
+                    # If HA is stopping or entry unloaded, exit the loop
                     _LOGGER.info(
-                        "Reconnect delay interrupted by cancellation. Exiting manager loop."
+                        "Exiting WebSocket manager loop because hass is not running or entry is not loaded."
                     )
-                    break  # Exit loop if cancelled during sleep
+                    break  # Exit while loop
 
-        _LOGGER.info("WebSocket connection manager loop finished.")
+        # Catch any unexpected error in the main loop logic itself (outside the inner try)
+        # Also catch CancelledError here to log the final exit reason properly
+        except asyncio.CancelledError:
+            _LOGGER.info("WebSocket connection manager task explicitly cancelled.")
+        except Exception as loop_err:
+            _LOGGER.exception(
+                "Unexpected error caught in WebSocket connection manager outer try block: %s",
+                loop_err,
+            )
+        finally:
+            # This finally block corresponds to the outer try
+            _LOGGER.info(
+                "WebSocket connection manager task function finished. hass.is_running=%s, entry.state=%s",
+                hass.is_running,
+                entry.state,
+            )
 
-    # Create and store the connection manager task
-    connection_task = hass.async_create_task(
-        _websocket_connection_manager(),
-        name=f"{DOMAIN} WebSocket Manager - {entry.entry_id}",
-    )
-    hass.data[DOMAIN][entry.entry_id][WEBSOCKET_TASK_KEY] = connection_task
+    async def _async_start_websocket_manager(event: HAEvent | None = None) -> None:
+        """Start the WebSocket manager task."""
+        # Ensure the task isn't already running (e.g., if HA restarts quickly)
+        # Check if entry still exists in hass.data
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if not entry_data or entry_data.get(WEBSOCKET_TASK_KEY):
+            _LOGGER.debug(
+                "WebSocket manager task already exists or entry data missing."
+            )
+            return
+
+        _LOGGER.debug("Creating and storing WebSocket connection manager task.")
+        connection_task = hass.async_create_task(
+            _websocket_connection_manager(),
+            name=f"{DOMAIN} WebSocket Manager - {entry.entry_id}",
+        )
+        # Store task in the existing entry_data dictionary
+        entry_data[WEBSOCKET_TASK_KEY] = connection_task
+
+    # Schedule the WebSocket start after HA starts
+    if hass.state == CoreState.running:
+        # HA is already running, start WS manager task immediately
+        _LOGGER.debug(
+            "Home Assistant already running, starting WebSocket manager directly."
+        )
+        await _async_start_websocket_manager()
+        start_listener_remove = None  # No listener needed
+    else:
+        # HA is starting, listen for the start event
+        _LOGGER.debug(
+            "Home Assistant starting, scheduling WebSocket manager via listener."
+        )
+        start_listener_remove = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_START, _async_start_websocket_manager
+        )
+
+    # Store the removal function for the start listener
+    hass.data[DOMAIN][entry.entry_id][START_LISTENER_REMOVE_KEY] = start_listener_remove
 
     return True
 
@@ -216,10 +292,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator: BticinoIntercomCoordinator = entry_data.get(COORDINATOR_KEY)
     websocket_client: WebsocketClient = entry_data.get(WEBSOCKET_CLIENT_KEY)
     connection_task: asyncio.Task = entry_data.get(WEBSOCKET_TASK_KEY)
+    start_listener_remove = entry_data.get(START_LISTENER_REMOVE_KEY)
 
-    # Remove the old listeners if they somehow still exist (shouldn't)
-    # if remove_start_listener := entry_data.get(START_LISTENER_REMOVE_KEY):
-    #     remove_start_listener()
+    # Remove the start listener if it exists
+    if start_listener_remove:
+        _LOGGER.debug("Removing HA start listener.")
+        start_listener_remove()
     # if remove_stop_listener := entry_data.get(STOP_LISTENER_REMOVE_KEY):
     #     remove_stop_listener()
 

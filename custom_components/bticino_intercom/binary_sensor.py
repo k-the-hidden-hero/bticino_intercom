@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
+from contextlib import suppress  # Import suppress for async_will_remove_from_hass
 
 from pybticino import AsyncAccount
 
@@ -88,7 +89,9 @@ class BticinoCallSensor(
             f"{module_data.get('name') or f'External Unit {module_id}'} Call"
         )
         self._attr_is_on = False  # State managed by dispatcher and timer
-        self._turn_off_timer: asyncio.TimerHandle | None = None
+        self._turn_off_canceller: Callable[[], None] | None = (
+            None  # Store the cancel function returned by async_call_later
+        )
 
         bridge_module_id = module_data.get("bridge")
         self._attr_device_info = DeviceInfo(
@@ -148,15 +151,19 @@ class BticinoCallSensor(
             self._attr_is_on = state
             self.async_write_ha_state()
 
-            # Cancel previous timer if a new 'on' signal arrives
-            if self._turn_off_timer:
-                self._turn_off_timer.cancel()
-                self._turn_off_timer = None
+            # Cancel previous timer if a new 'on' signal arrives or if state becomes false
+            if self._turn_off_canceller:
+                _LOGGER.debug(
+                    "Cancelling previous turn-off timer for %s", self.entity_id
+                )
+                self._turn_off_canceller()
+                self._turn_off_canceller = None
 
             # If the sensor turned on, set a timer to turn it off
             if state:
-                self._turn_off_timer = async_call_later(
-                    self.hass, CALL_SENSOR_TIMEOUT, self._turn_off
+                _LOGGER.debug("Setting turn-off timer for %s", self.entity_id)
+                self._turn_off_canceller = async_call_later(
+                    self.hass, CALL_SENSOR_TIMEOUT, self._turn_off_callback
                 )
         else:
             _LOGGER.debug(
@@ -166,10 +173,10 @@ class BticinoCallSensor(
             )
 
     @callback
-    def _turn_off(self, *args: Any) -> None:
+    def _turn_off_callback(self, *args: Any) -> None:
         """Turn the sensor off after timeout."""
-        _LOGGER.debug("Turning off call sensor %s after timeout", self.entity_id)
-        self._turn_off_timer = None
+        _LOGGER.debug("Executing turn-off callback for %s", self.entity_id)
+        self._turn_off_canceller = None  # Clear the stored canceller
         self._attr_is_on = False
         self.async_write_ha_state()
 
@@ -208,7 +215,11 @@ class BticinoCallSensor(
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
+        # Cancel the timer if it's active
+        if self._turn_off_canceller:
+            _LOGGER.debug(
+                "Cancelling turn-off timer for %s during removal", self.entity_id
+            )
+            self._turn_off_canceller()
+            self._turn_off_canceller = None
         await super().async_will_remove_from_hass()
-        if self._turn_off_timer:
-            self._turn_off_timer.cancel()
-            self._turn_off_timer = None
