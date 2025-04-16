@@ -91,7 +91,7 @@ Found a bug or have a feature request? Please open an issue on the [GitHub repos
 
 ## 🙏 Acknowledgements
 
-*   This integration relies heavily on the fantastic [pybticino](https://github.com/thekoma/pybticino) library. Many thanks to the original author(s)!
+*   This integration relies heavily on the fantastic [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Many thanks to the original author(s)!
 
 ## 📜 License
 
