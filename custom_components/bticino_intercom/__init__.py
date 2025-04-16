@@ -15,8 +15,14 @@ from homeassistant.const import (
     CONF_PASSWORD,
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
+    EVENT_HOMEASSISTANT_START,  # Import event for delayed start
+    EVENT_HOMEASSISTANT_STOP,  # Import event for stopping WS
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import (
+    HomeAssistant,
+    Event as HAEvent,
+    CoreState,
+)  # Import HAEvent type hint and CoreState
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -29,10 +35,13 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Key to store the listener removal function in runtime_data
+START_LISTENER_REMOVE_KEY = "start_listener_remove"
+STOP_LISTENER_REMOVE_KEY = "stop_listener_remove"
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up BTicino from a config entry."""
-    # hass.data.setdefault(DOMAIN, {}) # Not needed when using entry.runtime_data
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
 
@@ -84,18 +93,60 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # AuthError is already handled above and raises ConfigEntryAuthFailed
         raise ConfigEntryNotReady(f"Failed to fetch initial data: {err}") from err
 
-    # Start the WebSocket listener managed by the coordinator AFTER initial data fetch
-    await coordinator.async_start_websocket()
-
     # Forward the setup to platforms.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Define the function to start the websocket listener
+    async def start_websocket_listener(event: HAEvent) -> None:
+        """Start the WebSocket listener after Home Assistant has started."""
+        _LOGGER.debug("Home Assistant started, starting WebSocket listener.")
+        # Ensure coordinator is still available (might have been unloaded)
+        if coord := entry.runtime_data:
+            await coord.async_start_websocket()
+
+    # Define the function to stop the websocket listener on HA stop
+    async def stop_websocket_listener(event: HAEvent) -> None:
+        """Stop the WebSocket listener when Home Assistant stops."""
+        _LOGGER.debug("Home Assistant stopping, stopping WebSocket listener.")
+        if coord := entry.runtime_data:
+            await coord.async_stop_websocket()
+
+    # Schedule the WebSocket start after HA starts
+    if hass.state == CoreState.running:
+        # HA is already running, start WS immediately
+        await coordinator.async_start_websocket()
+        start_listener_remove = None  # No listener needed
+    else:
+        # HA is starting, listen for the start event
+        start_listener_remove = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_START, start_websocket_listener
+        )
+
+    # Listen for HA stop event to gracefully disconnect WebSocket
+    stop_listener_remove = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STOP, stop_websocket_listener
+    )
+
+    # Store the removal functions in runtime_data
+    entry.runtime_data = {
+        "coordinator": coordinator,
+        START_LISTENER_REMOVE_KEY: start_listener_remove,
+        STOP_LISTENER_REMOVE_KEY: stop_listener_remove,
+    }
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    coordinator: BticinoIntercomCoordinator = entry.runtime_data
+    runtime_data = entry.runtime_data
+    coordinator: BticinoIntercomCoordinator = runtime_data["coordinator"]
+
+    # Remove the listeners if they exist
+    if remove_start_listener := runtime_data.get(START_LISTENER_REMOVE_KEY):
+        remove_start_listener()
+    if remove_stop_listener := runtime_data.get(STOP_LISTENER_REMOVE_KEY):
+        remove_stop_listener()
 
     # Stop the WebSocket listener task via the coordinator
     await coordinator.async_stop_websocket()
@@ -106,11 +157,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # No need to manually pop from hass.data[DOMAIN] when using entry.runtime_data
 
     return unload_ok
-
-
-# Optional: Add async_migrate_entry if needed for future schema changes
-# async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-#     """Migrate old entry."""
-#     _LOGGER.debug("Migrating from version %s", config_entry.version)
-#     # Migration logic here
-#     return True
