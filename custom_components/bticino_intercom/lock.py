@@ -35,8 +35,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the BTicino lock platform."""
-    # Get the coordinator from runtime data
-    coordinator: BticinoIntercomCoordinator = entry.runtime_data
+    # Get the coordinator from hass.data
+    if not (entry_data := hass.data.get(DOMAIN, {}).get(entry.entry_id)) or not (
+        coordinator := entry_data.get("coordinator")
+    ):
+        _LOGGER.error("Coordinator not found in hass.data for entry %s", entry.entry_id)
+        return
 
     # Assuming coordinator.data is populated with module info after initial fetch
     entities_to_add = []

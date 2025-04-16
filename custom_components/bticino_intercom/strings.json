@@ -40,6 +40,11 @@
        "call": {
          "name": "Call"
        }
-     }
+     },
+    "sensor": {
+      "last_event": {
+        "name": "Last Event"
+      }
+    }
   }
 }

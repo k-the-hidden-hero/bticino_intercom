@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "bticino_intercom"
 
-PLATFORMS: list[Platform] = [Platform.LOCK, Platform.BINARY_SENSOR]
+PLATFORMS: list[Platform] = [Platform.LOCK, Platform.BINARY_SENSOR, Platform.SENSOR]
 
 # Configuration constants
 CONF_USERNAME = "username"
@@ -36,3 +36,9 @@ PUSH_TYPE_WEBSOCKET_CONNECTION = "BNC1-websocket_connection"  # Keep if used els
 
 # Dispatcher signal
 SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
+
+# Logbook Event Type
+EVENT_LOGBOOK_INCOMING_CALL = f"{DOMAIN}_incoming_call"
+
+# Data keys for coordinator
+DATA_LAST_EVENT = "last_event"

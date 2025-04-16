@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from typing import Any, Callable
-from datetime import timedelta
+from datetime import timedelta, datetime, UTC  # Added datetime, UTC
 import copy  # Import deepcopy
 
 from pybticino import AsyncAccount, WebsocketClient, AuthHandler
@@ -26,6 +26,8 @@ from .const import (
     SIGNAL_CALL_RECEIVED,
     EVENT_TYPE_INCOMING_CALL,
     PUSH_TYPE_WEBSOCKET_CONNECTION,
+    EVENT_LOGBOOK_INCOMING_CALL,  # Added Logbook event
+    DATA_LAST_EVENT,  # Added data key
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,20 +47,27 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         """Initialize the coordinator."""
         self.account = account
         self.websocket_client = websocket_client
-        self._websocket_task: asyncio.Task | None = None
+        # Removed _websocket_task attribute
 
         # Call super().__init__
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN} Coordinator - {entry.entry_id}",
-            update_interval=timedelta(hours=1),  # Example: Poll hourly as fallback
+            update_interval=timedelta(minutes=5),  # Update interval to 5 minutes
             update_method=self._async_update_data,
         )
         # Data is initialized by super().__init__ calling update_method
         self.entry = entry
         # Ensure self.data is initialized as a dictionary by the parent class
-        self.data: dict[str, Any] = {"homes": {}, "modules": {}}
+        # Initialize with last_event and events_history keys
+        self.data: dict[str, Any] = {
+            "homes": {},
+            "modules": {},
+            DATA_LAST_EVENT: {},
+            "events_history": {},
+        }
+        self.home_id: str = entry.data["home_id"]  # Store selected home_id
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the API, register devices, and return the combined data."""
@@ -67,38 +76,55 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         modules_data = {}
 
         try:
-            # 1. Fetch Topology
+            # 1. Fetch Topology (still needed to get all module details)
+            # Consider optimizing this if topology doesn't change often
             await self.account.async_update_topology()
             if not self.account.homes:
                 _LOGGER.warning("No homes found for this account.")
-                return {"homes": {}, "modules": {}}
+                # Return empty structure matching final_data keys
+                return {
+                    "homes": {},
+                    "modules": {},
+                    "events_history": {},
+                    DATA_LAST_EVENT: {},
+                }
+            if self.home_id not in self.account.homes:
+                raise UpdateFailed(
+                    f"Selected home_id {self.home_id} not found in account topology."
+                )
 
-            # Store topology data temporarily
-            for home_id, home_obj in self.account.homes.items():
-                homes_data[home_id] = home_obj.raw_data
-                for module_obj in home_obj.modules:
-                    modules_data[module_obj.id] = module_obj.raw_data
+            # Store topology data for the selected home and its modules
+            selected_home_obj = self.account.homes[self.home_id]
+            homes_data[self.home_id] = selected_home_obj.raw_data
+            for module_obj in selected_home_obj.modules:
+                modules_data[module_obj.id] = module_obj.raw_data
 
-            # 2. Fetch Status Data for all homes
-            for home_id in self.account.homes:
-                _LOGGER.debug("Fetching status for home %s", home_id)
-                status_data = await self.account.async_get_home_status(home_id)
+            # 2. Fetch Status Data ONLY for the selected home
+            _LOGGER.debug("Fetching status for selected home %s", self.home_id)
+            try:
+                status_data = await self.account.async_get_home_status(self.home_id)
                 modules_status = (
                     status_data.get("body", {}).get("home", {}).get("modules", [])
                 )
-                for module_status_update in modules_status:
-                    module_id = module_status_update.get("id")
-                    if module_id and module_id in modules_data:
-                        # Merge status into existing module data from topology
-                        for key, value in module_status_update.items():
-                            if key != "id":  # Don't overwrite id
-                                modules_data[module_id][key] = value
-                    elif module_id:
-                        _LOGGER.warning(
-                            "Module %s found in status but not in topology.", module_id
-                        )
-                        # Optionally add it if desired, but might indicate inconsistency
-                        # modules_data[module_id] = module_status_update
+            except (ApiError, AuthError) as err:
+                _LOGGER.warning(
+                    "Failed to fetch status for home %s: %s", self.home_id, err
+                )
+                modules_status = []  # Continue with empty status on error
+
+            for module_status_update in modules_status:
+                module_id = module_status_update.get("id")
+                if module_id and module_id in modules_data:
+                    # Merge status into existing module data from topology
+                    for key, value in module_status_update.items():
+                        if key != "id":  # Don't overwrite id
+                            modules_data[module_id][key] = value
+                elif module_id:
+                    _LOGGER.warning(
+                        "Module %s found in status but not in topology.", module_id
+                    )
+                    # Optionally add it if desired, but might indicate inconsistency
+                    # modules_data[module_id] = module_status_update
 
             # 3. Register/Update Devices in Registry using the merged data
             device_registry = dr.async_get(self.hass)
@@ -145,9 +171,34 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     config_entry_id=self.entry.entry_id, **device_info
                 )
 
-            # 4. Prepare final data structure to return (and store in self.data)
-            final_data = {"homes": homes_data, "modules": modules_data}
-            _LOGGER.debug("Data update finished. Final data: %s", final_data)
+            # 4. Fetch Events ONLY for the selected home
+            events_history_data = {}
+            _LOGGER.debug("Fetching events for selected home %s", self.home_id)
+            try:
+                events_data = await self.account.async_get_events(
+                    self.home_id, size=20
+                )  # Fetch last 20 events
+                # Store events under the specific home_id key
+                events_history_data[self.home_id] = (
+                    events_data.get("body", {}).get("home", {}).get("events", [])
+                )
+            except (ApiError, AuthError) as err:
+                _LOGGER.warning(
+                    "Failed to fetch events for home %s: %s", self.home_id, err
+                )
+                events_history_data[self.home_id] = []  # Store empty list on error
+
+            # 5. Prepare final data structure to return (and store in self.data)
+            # Note: homes_data now only contains the selected home
+            final_data = {
+                "homes": homes_data,
+                "modules": modules_data,
+                "events_history": events_history_data,
+                # Keep DATA_LAST_EVENT updated by websocket handler, not overwritten here
+                DATA_LAST_EVENT: self.data.get(DATA_LAST_EVENT, {}),
+            }
+            _LOGGER.debug("Data update finished.")  # Simplified log
+            # _LOGGER.debug("Final data: %s", final_data) # Avoid logging potentially large data
             return final_data
 
         except AuthError as err:
@@ -191,6 +242,24 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     _LOGGER.info("Incoming call detected for module %s", module_id)
                     async_dispatcher_send(
                         self.hass, SIGNAL_CALL_RECEIVED, True, module_id
+                    )
+                    # Fire Logbook event
+                    self.hass.bus.async_fire(
+                        EVENT_LOGBOOK_INCOMING_CALL,
+                        {
+                            "name": f"Incoming Call ({current_module_data.get('name', module_id)})",
+                            "module_id": module_id,
+                        },
+                    )
+                    # Update last event data
+                    self.data[DATA_LAST_EVENT] = {
+                        "type": EVENT_TYPE_INCOMING_CALL,
+                        "timestamp": datetime.now(UTC),
+                        "module_id": module_id,
+                        "module_name": current_module_data.get("name", module_id),
+                    }
+                    _LOGGER.debug(
+                        "Updated last event data: %s", self.data[DATA_LAST_EVENT]
                     )
                     updated = True  # Mark that an event occurred
                     break
@@ -281,39 +350,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 data_updated = True
 
         if data_updated:
-            # Notify listeners via DataUpdateCoordinator
-            _LOGGER.debug("Notifying listeners of updated data.")
-            self.async_set_updated_data(self.data)
+            # Request a full refresh to fetch latest status and events
+            _LOGGER.debug(
+                "WebSocket message processed, requesting coordinator refresh."
+            )
+            await self.async_request_refresh()
 
-    async def async_start_websocket(self) -> None:
-        """Start the WebSocket listener task."""
-        if self._websocket_task and not self._websocket_task.done():
-            _LOGGER.debug("WebSocket listener task already running")
-            return
-
-        if not self.websocket_client:
-            _LOGGER.error("Websocket client not initialized in coordinator")
-            return
-
-        _LOGGER.debug("Starting WebSocket listener task")
-        self._websocket_task = self.hass.async_create_task(
-            self.websocket_client.run_forever(),
-            name=f"{DOMAIN} WebSocket Listener - {self.entry.entry_id}",
-        )
-
-    async def async_stop_websocket(self) -> None:
-        """Stop the WebSocket listener task."""
-        if self._websocket_task and not self._websocket_task.done():
-            _LOGGER.debug("Cancelling WebSocket listener task")
-            self._websocket_task.cancel()
-            try:
-                await self._websocket_task
-            except asyncio.CancelledError:
-                _LOGGER.debug("WebSocket listener task cancelled successfully")
-            except Exception:
-                _LOGGER.exception("Error waiting for WebSocket task cancellation")
-            self._websocket_task = None
-
-        if self.websocket_client:
-            await self.websocket_client.disconnect()
-            _LOGGER.debug("WebSocket client disconnected")
+    # Removed async_start_websocket and async_stop_websocket methods
