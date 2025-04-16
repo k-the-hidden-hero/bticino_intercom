@@ -23,6 +23,9 @@ from homeassistant.helpers.event import async_call_later
 
 # Import the actual coordinator and signal
 from .coordinator import BticinoIntercomCoordinator
+
+# Import CoordinatorEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, SIGNAL_CALL_RECEIVED  # Remove unused consts
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,7 +60,10 @@ async def async_setup_entry(
     # WebSocket is started in __init__ by the coordinator
 
 
-class BticinoCallSensor(BinarySensorEntity):
+# Inherit from CoordinatorEntity as well, although state is updated via dispatcher
+class BticinoCallSensor(
+    CoordinatorEntity[BticinoIntercomCoordinator], BinarySensorEntity
+):
     """Representation of a BTicino Incoming Call Sensor."""
 
     _attr_has_entity_name = True
@@ -68,7 +74,7 @@ class BticinoCallSensor(BinarySensorEntity):
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the call sensor."""
-        self.coordinator = coordinator  # Store coordinator for device info
+        super().__init__(coordinator)  # Initialize CoordinatorEntity
         self._module_id = module_id
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
 
@@ -77,7 +83,7 @@ class BticinoCallSensor(BinarySensorEntity):
         self._attr_name = (
             f"{module_data.get('name') or f'External Unit {module_id}'} Call"
         )
-        self._attr_is_on = False
+        self._attr_is_on = False  # State managed by dispatcher and timer
         self._turn_off_timer: asyncio.TimerHandle | None = None
 
         bridge_module_id = module_data.get("bridge")
@@ -87,7 +93,7 @@ class BticinoCallSensor(BinarySensorEntity):
             manufacturer="BTicino",
             model=module_data.get("type", "BNEU"),  # Use type from data
             via_device=(DOMAIN, bridge_module_id) if bridge_module_id else None,
-            # sw_version=module_data.get("firmware_version"),
+            # sw_version and hw_version are now populated by the coordinator device registration
         )
         # Initialize extra attributes
         self._update_extra_attributes()
@@ -114,7 +120,14 @@ class BticinoCallSensor(BinarySensorEntity):
             "variant": module_data.get("variant"),
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
-            # Add other relevant attributes from module_data if needed
+            "appliance_type": module_data.get("appliance_type"),  # Added
+            "local_ipv4": module_data.get(
+                "local_ipv4"
+            ),  # Added (likely only on bridge)
+            "wifi_strength": module_data.get(
+                "wifi_strength"
+            ),  # Added (likely only on bridge)
+            "uptime": module_data.get("uptime"),  # Added
         }
         self._attr_extra_state_attributes = {
             k: v for k, v in attrs.items() if v is not None
@@ -122,7 +135,6 @@ class BticinoCallSensor(BinarySensorEntity):
 
     @callback
     def _handle_call_received(self, state: bool, module_id: str | None) -> None:
-        """Handle the dispatcher signal for incoming calls."""
         """Handle the dispatcher signal for incoming calls."""
         # Check if the signal is relevant for this specific sensor's module
         if module_id == self._module_id:
@@ -159,16 +171,36 @@ class BticinoCallSensor(BinarySensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
+        # Call CoordinatorEntity's method first
         await super().async_added_to_hass()
+        # Register dispatcher listener
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass, SIGNAL_CALL_RECEIVED, self._handle_call_received
             )
         )
-        # Also update extra attributes when coordinator updates
+        # Register listener for coordinator updates to update extra attributes
+        # Note: _handle_coordinator_update from CoordinatorEntity calls async_write_ha_state
+        # We only need to update our internal attribute state here.
         self.async_on_remove(
-            self.coordinator.async_add_listener(self._update_extra_attributes)
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
         )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator (for extra attributes)."""
+        self._update_extra_attributes()
+        # We also need to update availability based on coordinator data
+        if not self.coordinator.data or "modules" not in self.coordinator.data:
+            self._attr_available = False
+        else:
+            module_data = self.coordinator.data["modules"].get(self._module_id)
+            if not module_data:
+                self._attr_available = False
+            else:
+                self._attr_available = module_data.get("reachable", True)
+        # Let CoordinatorEntity handle async_write_ha_state if needed
+        super()._handle_coordinator_update()
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
