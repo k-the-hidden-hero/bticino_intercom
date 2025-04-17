@@ -8,6 +8,22 @@ Integrate your BTicino Classe 100X or 300X video intercom system with Home Assis
 
 This integration relies on the BTicino/Netatmo cloud API and utilizes a persistent WebSocket connection for real-time updates, particularly for call events. ☁️🔄
 
+> [!IMPORTANT]
+> This component works only with **netatmo cloud connected devices**.
+>
+> If your device works with bticino ~~shitty~~ poor written cloud you
+> can just hope for a firmware upgrade.
+>
+> At the date of writing this (April 2025) they sent out a mail that they will migrate users to a new cloud (probably the NetAtmo one)
+>
+> If you are in doubt on which firmware you are using look at the app on your phone.
+> The right one is called **Home+Security**:
+> - [Android](https://play.google.com/store/apps/details?id=com.netatmo.camera)
+> - [iOS](https://apps.apple.com/us/app/home-security/id951725393)
+>
+> If you are using one called **BTicino Door Entry** app I'm sorry.
+
+
 ## ✨ Features
 
 *   **Lock Control:** (`lock` entity) Open external and internal door locks connected to your BTicino system (BNDL modules). Uses optimistic state updates. 🔓
