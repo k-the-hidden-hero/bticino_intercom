@@ -35,3 +35,12 @@ EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
 
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"
+
+LOCK_TYPES = [
+    "BNDL",
+    "BNSL"
+]
+
+DOOR_BELL_TYPES = [
+    "BNEU",
+]

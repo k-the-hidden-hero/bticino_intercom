@@ -25,7 +25,7 @@ from .coordinator import BticinoIntercomCoordinator
 
 # Import CoordinatorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .const import DOMAIN, SIGNAL_CALL_RECEIVED  # Remove unused consts
+from .const import DOMAIN, SIGNAL_CALL_RECEIVED, DOOR_BELL_TYPES  # Remove unused consts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ async def async_setup_entry(
     if coordinator.data and "modules" in coordinator.data:
         for module_id, module_data in coordinator.data["modules"].items():
             # Create a call sensor for each External Unit (likely source of calls)
-            if module_data.get("type") == "BNEU":
+            if module_data.get("type") in DOOR_BELL_TYPES:
                 _LOGGER.debug("Found external unit module: %s", module_id)
                 entities_to_add.append(BticinoCallSensor(coordinator, module_id))
     else:

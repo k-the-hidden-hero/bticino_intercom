@@ -27,7 +27,7 @@ from homeassistant.helpers.event import async_call_later  # Added async_call_lat
 from .coordinator import BticinoIntercomCoordinator
 
 # Import domain constant
-from .const import DOMAIN
+from .const import DOMAIN, LOCK_TYPES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def async_setup_entry(
     entities_to_add = []
     if coordinator.data and "modules" in coordinator.data:
         for module_id, module_data in coordinator.data["modules"].items():
-            if module_data.get("type") == "BNDL":  # BTicino Door Lock module type
+            if module_data.get("type") in LOCK_TYPES:  # BTicino Door Lock module type
                 _LOGGER.debug("Found lock module: %s", module_id)
                 entities_to_add.append(BticinoLockEntity(coordinator, module_id))
     else:
