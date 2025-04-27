@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # Allow the action to create releases
+      pull-requests: write # Allow the action to create PRs
 
     steps:
       - name: Checkout code 🛎️
@@ -21,6 +22,47 @@ jobs:
         id: get_version
         # Extract the version number from the tag (removes 'refs/tags/')
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Check and update manifest version 🔍
+        run: |
+          # Extract version from tag (remove 'v' prefix)
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          
+          # Read current version from manifest.json
+          MANIFEST_VERSION=$(jq -r '.version' custom_components/bticino_intercom/manifest.json)
+          
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "Version mismatch: Tag version ($TAG_VERSION) != Manifest version ($MANIFEST_VERSION)"
+            
+            # Update manifest.json with the correct version
+            jq --arg v "$TAG_VERSION" '.version = $v' custom_components/bticino_intercom/manifest.json > manifest.json.tmp
+            mv manifest.json.tmp custom_components/bticino_intercom/manifest.json
+            
+            # Configure git
+            git config --global user.name 'GitHub Actions'
+            git config --global user.email 'github-actions@github.com'
+            
+            # Create a new branch for the update
+            BRANCH_NAME="fix/manifest-version-$TAG_VERSION"
+            git checkout -b $BRANCH_NAME
+            
+            # Commit and push the changes
+            git add custom_components/bticino_intercom/manifest.json
+            git commit -m "fix: update manifest version to $TAG_VERSION"
+            git push origin $BRANCH_NAME
+            
+            # Create a PR to merge the changes
+            gh pr create \
+              --title "fix: update manifest version to $TAG_VERSION" \
+              --body "This PR updates the manifest version to match the release tag $TAG_VERSION" \
+              --base main \
+              --head $BRANCH_NAME
+            
+            # Fail the workflow to prevent release with incorrect version
+            exit 1
+          else
+            echo "Version check passed: Tag version ($TAG_VERSION) matches Manifest version ($MANIFEST_VERSION)"
+          fi
 
       - name: Package integration into zip 🤐
         run: |
