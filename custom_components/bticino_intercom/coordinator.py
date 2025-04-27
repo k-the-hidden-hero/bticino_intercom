@@ -31,6 +31,8 @@ from .const import (
     EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
     EVENT_LOGBOOK_TERMINATED,
     DATA_LAST_EVENT,
+    PUSH_TYPE_RTC,
+    BRIDGE_TYPES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -248,7 +250,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         module_updated = False
 
         # --- Handle RTC Events (Call, Rescind, Terminate) ---
-        if push_type == "BNC1-rtc":
+        if push_type == f"{BRIDGE_TYPES[0]}-{PUSH_TYPE_RTC}":
             rtc_event_type = session_data.get(
                 "type"
             )  # e.g., "call", "rescind", "terminate"
@@ -338,7 +340,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             possible_state_data = extra_params["data"]
             # Check only if it's NOT an RTC event we already handled
             if not (
-                push_type == "BNC1-rtc"
+                push_type == f"{BRIDGE_TYPES[0]}-{PUSH_TYPE_RTC}"
                 and session_data.get("type") in ["call", "rescind", "terminate"]
             ):
                 for key, value in possible_state_data.items():

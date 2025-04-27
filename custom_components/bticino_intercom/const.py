@@ -23,7 +23,8 @@ EVENT_TYPE_ANSWERED_ELSEWHERE = "answered_elsewhere"
 EVENT_TYPE_TERMINATED = "terminated"
 
 # Push types from websocket
-PUSH_TYPE_WEBSOCKET_CONNECTION = "BNC1-websocket_connection"  # Used for RTC events
+PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
+PUSH_TYPE_WEBSOCKET_CONNECTION = f"{BRIDGE_TYPES[0]}-websocket_connection"  # Used for RTC events
 
 # Dispatcher signal
 SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
@@ -43,4 +44,9 @@ LOCK_TYPES = [
 
 DOOR_BELL_TYPES = [
     "BNEU",
+]
+
+BRIDGE_TYPES = [
+    "BNC1",
+    # Aggiungi qui altri tipi di bridge supportati
 ]

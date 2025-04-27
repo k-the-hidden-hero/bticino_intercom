@@ -91,7 +91,7 @@ class BticinoLockEntity(CoordinatorEntity[BticinoIntercomCoordinator], LockEntit
             identifiers={(DOMAIN, module_id)},
             name=module_data.get("name") or f"Lock {module_id}",  # Keep name for device
             manufacturer="BTicino",
-            model=module_data.get("type", "BNDL"),
+            model=module_data.get("type") or "Unknown Lock",  # Use actual type or fallback to generic name
             via_device=(DOMAIN, bridge_module_id) if bridge_module_id else None,
             # sw_version and hw_version are now populated by the coordinator device registration
         )

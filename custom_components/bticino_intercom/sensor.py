@@ -16,6 +16,7 @@ from .const import (
     EVENT_TYPE_INCOMING_CALL,
     EVENT_TYPE_ANSWERED_ELSEWHERE,
     EVENT_TYPE_TERMINATED,
+    BRIDGE_TYPES,
 )
 from .coordinator import BticinoIntercomCoordinator
 
@@ -32,14 +33,12 @@ async def async_setup_entry(
         "coordinator"
     ]
 
-    # Find the main bridge module (e.g., BNC1) to attach the sensor to.
+    # Find the main bridge module to attach the sensor to.
     bridge_module_id = None
     bridge_module_data = None
-    # Add other potential bridge types if necessary
-    bridge_types = ["BNC1"]
     if coordinator.data and "modules" in coordinator.data:
         for module_id, module_data in coordinator.data["modules"].items():
-            if module_data.get("type") in bridge_types and not module_data.get(
+            if module_data.get("type") in BRIDGE_TYPES and not module_data.get(
                 "bridge"
             ):
                 bridge_module_id = module_id
@@ -49,7 +48,7 @@ async def async_setup_entry(
 
     if not bridge_module_id:
         _LOGGER.warning(
-            "Could not identify a bridge module (e.g., BNC1). "
+            "Could not identify a bridge module. "
             "Last Event sensor will not be linked to a specific device."
         )
         # Optionally, could still create the sensor but without device info,

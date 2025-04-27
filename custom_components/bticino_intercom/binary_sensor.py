@@ -94,9 +94,9 @@ class BticinoCallSensor(
         bridge_module_id = module_data.get("bridge")
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, module_id)},
-            name=module_data.get("name") or f"External Unit {module_id}",
+            name=module_data.get("name") or f"Door Bell {module_id}",
             manufacturer="BTicino",
-            model=module_data.get("type", "BNEU"),  # Use type from data
+            model=module_data.get("type") or "Unknown Door Bell",
             via_device=(DOMAIN, bridge_module_id) if bridge_module_id else None,
             # sw_version and hw_version are now populated by the coordinator device registration
         )
