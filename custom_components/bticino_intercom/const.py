@@ -22,6 +22,21 @@ EVENT_TYPE_INCOMING_CALL = "incoming_call"
 EVENT_TYPE_ANSWERED_ELSEWHERE = "answered_elsewhere"
 EVENT_TYPE_TERMINATED = "terminated"
 
+# Device Types
+BRIDGE_TYPES = [
+    "BNC1",
+    # Aggiungi qui altri tipi di bridge supportati
+]
+
+LOCK_TYPES = [
+    "BNDL",
+    "BNSL"
+]
+
+DOOR_BELL_TYPES = [
+    "BNEU",
+]
+
 # Push types from websocket
 PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
 PUSH_TYPE_WEBSOCKET_CONNECTION = f"{BRIDGE_TYPES[0]}-websocket_connection"  # Used for RTC events
@@ -36,17 +51,3 @@ EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
 
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"
-
-LOCK_TYPES = [
-    "BNDL",
-    "BNSL"
-]
-
-DOOR_BELL_TYPES = [
-    "BNEU",
-]
-
-BRIDGE_TYPES = [
-    "BNC1",
-    # Aggiungi qui altri tipi di bridge supportati
-]
