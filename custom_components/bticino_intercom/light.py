@@ -4,13 +4,15 @@ import logging
 from typing import Any, Dict, Optional
 
 from homeassistant.components.light import LightEntity, ColorMode
+from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.event import async_call_later
 
-from .const import DOMAIN, LIGHT_TYPES
+from .const import DOMAIN, LIGHT_TYPES, LOCK_RELOCK_DELAY
 from .coordinator import BticinoIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,15 +26,29 @@ async def async_setup_entry(
     """Set up BTicino lights based on config entry."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
+    # Get the configuration option
+    light_as_lock = entry.options.get("light_as_lock", False)
+
     entities = []
     if coordinator.data and "modules" in coordinator.data:
         for module_id, module_data in coordinator.data["modules"].items():
-            if module_data.get("type") in LIGHT_TYPES:
-                _LOGGER.debug("Found light module: %s", module_id)
+            # Only create a standard light entity if the type matches AND light_as_lock is False
+            if module_data.get("type") in LIGHT_TYPES and not light_as_lock:
+                _LOGGER.debug(
+                    "Found light module %s, representing as standard light.",
+                    module_id,
+                )
                 entities.append(BticinoLight(coordinator, module_id))
+            elif module_data.get("type") in LIGHT_TYPES and light_as_lock:
+                _LOGGER.debug(
+                    "Found light module %s, but configured as lock. Skipping light entity creation.",
+                    module_id,
+                )
 
     if not entities:
-        _LOGGER.debug("No BTicino light modules found")
+        _LOGGER.debug(
+            "No BTicino light modules found or configured to be represented as light"
+        )
 
     async_add_entities(entities)
 
@@ -155,6 +171,9 @@ class BticinoLight(CoordinatorEntity, LightEntity):
         """Handle updated data from the coordinator."""
         # Update internal state from coordinator data
         module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
-        self._attr_is_on = bool(module_data.get("status") == "on")
+        new_state = bool(module_data.get("status") == "on")
+        if self._attr_is_on != new_state:
+            _LOGGER.debug("Light %s state updated to %s", self.entity_id, new_state)
+            self._attr_is_on = new_state
         # Let HA know state + attributes might have changed
         self.async_write_ha_state()

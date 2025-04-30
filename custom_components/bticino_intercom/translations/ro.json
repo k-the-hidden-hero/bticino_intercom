@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Detalii cont BTicino",
+        "description": "Introduceți detaliile contului dvs. Netatmo/BTicino.",
+        "data": {
+          "username": "Nume utilizator (e-mail)",
+          "password": "Parolă"
+        }
+      },
+      "select_home": {
+        "title": "Selectați casa BTicino",
+        "description": "Au fost găsite mai multe case pentru contul dvs. Vă rugăm să selectați casa pe care doriți să o adăugați.",
+        "data": {
+          "home_id": "Casă"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nu se poate conecta la API-ul BTicino/Netatmo. Vă rugăm să verificați conexiunea la rețea.",
+      "invalid_auth": "Nume utilizator, parolă sau credențiale API invalide.",
+      "unknown": "A apărut o eroare necunoscută."
+    },
+    "abort": {
+      "already_configured": "Contul este deja configurat.",
+      "no_homes_found": "Nu au fost găsite case pentru acest cont BTicino."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opțiuni iluminare BTicino",
+        "description": "Configurați comportamentul iluminării BTicino",
+        "data": {
+          "light_as_lock": "Utilizați releul de iluminat ca încuietoare (configurație alternativă)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Nu se poate conecta, vă rugăm să încercați din nou mai târziu."
+    },
+    "error": {
+      "cannot_connect": "Nu se poate conecta, vă rugăm să încercați din nou mai târziu."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "Ușă exterioară"
+      },
+      "internal_door": {
+        "name": "Ușă interioară"
+      }
+    },
+    "binary_sensor": {
+      "call": {
+        "name": "Apel"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Ultimul eveniment"
+      }
+    }
+  }
+}

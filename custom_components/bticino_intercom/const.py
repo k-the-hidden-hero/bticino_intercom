@@ -70,3 +70,6 @@ UPDATE_INTERVAL = 5
 
 # Light specific constants
 LIGHT_AUTO_OFF_DELAY = 10  # seconds
+
+# Lock specific constants
+LOCK_RELOCK_DELAY = 5  # seconds

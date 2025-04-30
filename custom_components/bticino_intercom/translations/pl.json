@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dane konta BTicino",
+        "description": "Wprowadź dane swojego konta Netatmo/BTicino.",
+        "data": {
+          "username": "Nazwa użytkownika (e-mail)",
+          "password": "Hasło"
+        }
+      },
+      "select_home": {
+        "title": "Wybierz dom BTicino",
+        "description": "Znaleziono wiele domów dla Twojego konta. Wybierz dom, który chcesz dodać.",
+        "data": {
+          "home_id": "Dom"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nie można połączyć się z API BTicino/Netatmo. Sprawdź połączenie sieciowe.",
+      "invalid_auth": "Nieprawidłowa nazwa użytkownika, hasło lub dane uwierzytelniające API.",
+      "unknown": "Wystąpił nieznany błąd."
+    },
+    "abort": {
+      "already_configured": "Konto jest już skonfigurowane.",
+      "no_homes_found": "Nie znaleziono domów dla tego konta BTicino."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opcje oświetlenia BTicino",
+        "description": "Skonfiguruj zachowanie oświetlenia BTicino",
+        "data": {
+          "light_as_lock": "Użyj przekaźnika oświetlenia jako zamka (konfiguracja alternatywna)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Nie można połączyć się, spróbuj ponownie później."
+    },
+    "error": {
+      "cannot_connect": "Nie można połączyć się, spróbuj ponownie później."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "Drzwi zewnętrzne"
+      },
+      "internal_door": {
+        "name": "Drzwi wewnętrzne"
+      }
+    },
+    "binary_sensor": {
+      "call": {
+        "name": "Wezwanie"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Ostatnie zdarzenie"
+      }
+    }
+  }
+}

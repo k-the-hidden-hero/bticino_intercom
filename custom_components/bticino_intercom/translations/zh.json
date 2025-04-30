@@ -21,6 +21,23 @@
       "already_configured": "账户已配置。"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BTicino照明选项",
+        "description": "配置BTicino照明的行为",
+        "data": {
+          "light_as_lock": "使用照明继电器作为锁（替代设置）"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "无法连接，请稍后重试。"
+    },
+    "error": {
+      "cannot_connect": "无法连接，请稍后重试。"
+    }
+  },
   "entity": {
     "lock": {
       "external_door": {

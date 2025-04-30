@@ -2,38 +2,66 @@
   "config": {
     "step": {
       "user": {
-        "title": "Identifiants du Compte BTicino",
-        "description": "Entrez vos identifiants de compte Netatmo/BTicino et vos clés API.",
+        "title": "Identifiants du compte BTicino",
+        "description": "Entrez vos identifiants de compte Netatmo/BTicino.",
         "data": {
-          "username": "Nom d'utilisateur (Email)",
-          "password": "Mot de passe",
-          "client_id": "ID Client (Clé API)",
-          "client_secret": "Clé Secrète"
+          "username": "Nom d'utilisateur (e-mail)",
+          "password": "Mot de passe"
+        }
+      },
+      "select_home": {
+        "title": "Sélectionner la maison BTicino",
+        "description": "Plusieurs maisons ont été trouvées pour votre compte. Veuillez sélectionner la maison que vous souhaitez ajouter.",
+        "data": {
+          "home_id": "Maison"
         }
       }
     },
     "error": {
-      "cannot_connect": "Impossible de se connecter à l'API BTicino/Netatmo. Vérifiez votre connexion réseau.",
+      "cannot_connect": "Impossible de se connecter à l'API BTicino/Netatmo. Veuillez vérifier votre connexion réseau.",
       "invalid_auth": "Nom d'utilisateur, mot de passe ou identifiants API invalides.",
       "unknown": "Une erreur inconnue s'est produite."
     },
     "abort": {
-      "already_configured": "Compte déjà configuré."
+      "already_configured": "Le compte est déjà configuré.",
+      "no_homes_found": "Aucune maison trouvée pour ce compte BTicino."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options d'éclairage BTicino",
+        "description": "Configurez le comportement de votre éclairage BTicino",
+        "data": {
+          "light_as_lock": "Utiliser le relais d'éclairage comme serrure (configuration alternative)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Impossible de se connecter, veuillez réessayer plus tard."
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter, veuillez réessayer plus tard."
     }
   },
   "entity": {
     "lock": {
       "external_door": {
-        "name": "Porte Extérieure"
+        "name": "Porte extérieure"
       },
       "internal_door": {
-         "name": "Porte Intérieure"
+        "name": "Porte intérieure"
       }
     },
-     "binary_sensor": {
-       "call": {
-         "name": "Appel"
-       }
-     }
+    "binary_sensor": {
+      "call": {
+        "name": "Appel"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Dernier événement"
+      }
+    }
   }
 }

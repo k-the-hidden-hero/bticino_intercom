@@ -2,38 +2,66 @@
   "config": {
     "step": {
       "user": {
-        "title": "Credenciales de Cuenta BTicino",
-        "description": "Ingrese sus credenciales de cuenta Netatmo/BTicino y claves API.",
+        "title": "Credenciales de cuenta BTicino",
+        "description": "Introduzca sus credenciales de cuenta Netatmo/BTicino.",
         "data": {
-          "username": "Nombre de usuario (Correo electrónico)",
-          "password": "Contraseña",
-          "client_id": "ID de Cliente (Clave API)",
-          "client_secret": "Clave Secreta"
+          "username": "Nombre de usuario (correo electrónico)",
+          "password": "Contraseña"
+        }
+      },
+      "select_home": {
+        "title": "Seleccionar casa BTicino",
+        "description": "Se encontraron múltiples casas para su cuenta. Por favor, seleccione la casa que desea añadir.",
+        "data": {
+          "home_id": "Casa"
         }
       }
     },
     "error": {
-      "cannot_connect": "No se puede conectar a la API BTicino/Netatmo. Verifique su conexión de red.",
-      "invalid_auth": "Nombre de usuario, contraseña o credenciales API no válidas.",
+      "cannot_connect": "No se puede conectar a la API de BTicino/Netatmo. Por favor, verifique su conexión de red.",
+      "invalid_auth": "Nombre de usuario, contraseña o credenciales de API inválidos.",
       "unknown": "Se ha producido un error desconocido."
     },
     "abort": {
-      "already_configured": "Cuenta ya configurada."
+      "already_configured": "La cuenta ya está configurada.",
+      "no_homes_found": "No se encontraron casas para esta cuenta BTicino."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones de iluminación BTicino",
+        "description": "Configure el comportamiento de su iluminación BTicino",
+        "data": {
+          "light_as_lock": "Usar relé de iluminación como cerradura (configuración alternativa)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "No se puede conectar, por favor inténtelo de nuevo más tarde."
+    },
+    "error": {
+      "cannot_connect": "No se puede conectar, por favor inténtelo de nuevo más tarde."
     }
   },
   "entity": {
     "lock": {
       "external_door": {
-        "name": "Puerta Externa"
+        "name": "Puerta exterior"
       },
       "internal_door": {
-         "name": "Puerta Interna"
+        "name": "Puerta interior"
       }
     },
-     "binary_sensor": {
-       "call": {
-         "name": "Llamada"
-       }
-     }
+    "binary_sensor": {
+      "call": {
+        "name": "Llamada"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Último evento"
+      }
+    }
   }
 }

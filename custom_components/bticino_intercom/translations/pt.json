@@ -2,38 +2,66 @@
   "config": {
     "step": {
       "user": {
-        "title": "Credenciais da Conta BTicino",
-        "description": "Insira suas credenciais da conta Netatmo/BTicino e chaves API.",
+        "title": "Detalhes da conta BTicino",
+        "description": "Introduza os detalhes da sua conta Netatmo/BTicino.",
         "data": {
-          "username": "Nome de usuário (Email)",
-          "password": "Senha",
-          "client_id": "ID do Cliente (Chave API)",
-          "client_secret": "Chave Secreta"
+          "username": "Nome de utilizador (e-mail)",
+          "password": "Palavra-passe"
+        }
+      },
+      "select_home": {
+        "title": "Selecionar casa BTicino",
+        "description": "Foram encontradas várias casas para a sua conta. Selecione a casa que deseja adicionar.",
+        "data": {
+          "home_id": "Casa"
         }
       }
     },
     "error": {
-      "cannot_connect": "Não foi possível conectar à API BTicino/Netatmo. Verifique sua conexão de rede.",
-      "invalid_auth": "Nome de usuário, senha ou credenciais de API inválidas.",
+      "cannot_connect": "Não é possível ligar à API BTicino/Netatmo. Verifique a sua ligação à rede.",
+      "invalid_auth": "Nome de utilizador, palavra-passe ou credenciais de API inválidas.",
       "unknown": "Ocorreu um erro desconhecido."
     },
     "abort": {
-      "already_configured": "Conta já configurada."
+      "already_configured": "A conta já está configurada.",
+      "no_homes_found": "Não foram encontradas casas para esta conta BTicino."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opções de iluminação BTicino",
+        "description": "Configure o comportamento da iluminação BTicino",
+        "data": {
+          "light_as_lock": "Usar relé de iluminação como fechadura (configuração alternativa)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Não é possível ligar, tente novamente mais tarde."
+    },
+    "error": {
+      "cannot_connect": "Não é possível ligar, tente novamente mais tarde."
     }
   },
   "entity": {
     "lock": {
       "external_door": {
-        "name": "Porta Externa"
+        "name": "Porta exterior"
       },
       "internal_door": {
-         "name": "Porta Interna"
+        "name": "Porta interior"
       }
     },
-     "binary_sensor": {
-       "call": {
-         "name": "Chamada"
-       }
-     }
+    "binary_sensor": {
+      "call": {
+        "name": "Chamada"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Último evento"
+      }
+    }
   }
 }

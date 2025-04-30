@@ -21,6 +21,23 @@
       "already_configured": "تم تكوين الحساب بالفعل."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "خيارات إضاءة BTicino",
+        "description": "تكوين سلوك إضاءة BTicino",
+        "data": {
+          "light_as_lock": "استخدام مرحل الإضاءة كقفل (إعداد بديل)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "لا يمكن الاتصال، يرجى المحاولة مرة أخرى لاحقًا."
+    },
+    "error": {
+      "cannot_connect": "لا يمكن الاتصال، يرجى المحاولة مرة أخرى لاحقًا."
+    }
+  },
   "entity": {
     "lock": {
       "external_door": {

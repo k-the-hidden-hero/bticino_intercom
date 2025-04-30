@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BTicino-accountgegevens",
+        "description": "Voer uw Netatmo/BTicino-accountgegevens in.",
+        "data": {
+          "username": "Gebruikersnaam (e-mail)",
+          "password": "Wachtwoord"
+        }
+      },
+      "select_home": {
+        "title": "BTicino-huis selecteren",
+        "description": "Er zijn meerdere huizen gevonden voor uw account. Selecteer het huis dat u wilt toevoegen.",
+        "data": {
+          "home_id": "Huis"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken met de BTicino/Netatmo-API. Controleer uw netwerkverbinding.",
+      "invalid_auth": "Ongeldige gebruikersnaam, wachtwoord of API-referenties.",
+      "unknown": "Er is een onbekende fout opgetreden."
+    },
+    "abort": {
+      "already_configured": "Account is al geconfigureerd.",
+      "no_homes_found": "Geen huizen gevonden voor dit BTicino-account."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BTicino-verlichtingsopties",
+        "description": "Configureer het gedrag van uw BTicino-verlichting",
+        "data": {
+          "light_as_lock": "Gebruik verlichtingsrelais als slot (alternatieve configuratie)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Kan geen verbinding maken, probeer het later opnieuw."
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken, probeer het later opnieuw."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "Buitendeur"
+      },
+      "internal_door": {
+        "name": "Binnendeur"
+      }
+    },
+    "binary_sensor": {
+      "call": {
+        "name": "Oproep"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Laatste gebeurtenis"
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BTicino-Kontoanmeldedaten",
+        "description": "Geben Sie Ihre Netatmo/BTicino-Kontoanmeldedaten ein.",
+        "data": {
+          "username": "Benutzername (E-Mail)",
+          "password": "Passwort"
+        }
+      },
+      "select_home": {
+        "title": "BTicino-Haus auswählen",
+        "description": "Für Ihr Konto wurden mehrere Häuser gefunden. Bitte wählen Sie das Haus aus, das Sie hinzufügen möchten.",
+        "data": {
+          "home_id": "Haus"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zur BTicino/Netatmo-API nicht möglich. Bitte überprüfen Sie Ihre Netzwerkverbindung.",
+      "invalid_auth": "Ungültiger Benutzername, Passwort oder API-Anmeldedaten.",
+      "unknown": "Ein unbekannter Fehler ist aufgetreten."
+    },
+    "abort": {
+      "already_configured": "Konto ist bereits konfiguriert.",
+      "no_homes_found": "Keine Häuser für dieses BTicino-Konto gefunden."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BTicino-Beleuchtungsoptionen",
+        "description": "Konfigurieren Sie das Verhalten Ihrer BTicino-Beleuchtung",
+        "data": {
+          "light_as_lock": "Beleuchtungsrelais als Schloss verwenden (alternative Konfiguration)"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Verbindung nicht möglich, bitte versuchen Sie es später erneut."
+    },
+    "error": {
+      "cannot_connect": "Verbindung nicht möglich, bitte versuchen Sie es später erneut."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "Außentür"
+      },
+      "internal_door": {
+        "name": "Innentür"
+      }
+    },
+    "binary_sensor": {
+      "call": {
+        "name": "Anruf"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Letztes Ereignis"
+      }
+    }
+  }
+}

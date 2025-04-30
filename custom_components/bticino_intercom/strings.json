@@ -27,6 +27,23 @@
       "no_homes_found": "No homes found for this BTicino account."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BTicino Light Options",
+        "description": "Configure how your BTicino lights behave",
+        "data": {
+          "light_as_lock": "Use light relay as door lock (Spanish installation method)"
+        }
+      }
+    },
+    "abort": {
+        "cannot_connect": "Failed to connect, please try again later."
+    },
+    "error": {
+        "cannot_connect": "Failed to connect, please try again later."
+    }
+  },
   "entity": {
     "lock": {
       "external_door": {

@@ -108,6 +108,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Forward the setup to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Add the update listener
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
     # --- Define WebSocket Connection Manager Task and Start Logic ---
     async def _websocket_connection_manager() -> None:
         """Manage the WebSocket connection and reconnection."""
@@ -280,51 +283,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    # Retrieve data from hass.data
-    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if not entry_data:
-        _LOGGER.warning(
-            "Cannot unload entry %s, data not found in hass.data", entry.entry_id
-        )
-        return False  # Or True depending on desired behavior if data is missing
+    _LOGGER.info("Unloading BTicino integration entry: %s", entry.entry_id)
 
-    coordinator: BticinoIntercomCoordinator = entry_data.get(COORDINATOR_KEY)
-    websocket_client: WebsocketClient = entry_data.get(WEBSOCKET_CLIENT_KEY)
-    connection_task: asyncio.Task = entry_data.get(WEBSOCKET_TASK_KEY)
-    start_listener_remove = entry_data.get(START_LISTENER_REMOVE_KEY)
+    # Stop the WebSocket connection manager task
+    if entry_data := hass.data.get(DOMAIN, {}).get(entry.entry_id):
+        websocket_task = entry_data.pop(WEBSOCKET_TASK_KEY, None)
+        if websocket_task:
+            _LOGGER.debug("Cancelling WebSocket manager task during unload.")
+            websocket_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await websocket_task
+            _LOGGER.debug("WebSocket manager task cancelled.")
 
-    # Remove the start listener if it exists
-    if start_listener_remove:
-        _LOGGER.debug("Removing HA start listener.")
-        start_listener_remove()
-    # if remove_stop_listener := entry_data.get(STOP_LISTENER_REMOVE_KEY):
-    #     remove_stop_listener()
+        # Clean up websocket client (disconnect is handled by task cancellation finally)
+        entry_data.pop(WEBSOCKET_CLIENT_KEY, None)
 
-    # Cancel the connection manager task first
-    if connection_task and not connection_task.done():
-        _LOGGER.debug("Cancelling WebSocket connection manager task")
-        connection_task.cancel()
-        try:
-            await connection_task
-        except asyncio.CancelledError:
-            _LOGGER.debug("WebSocket connection manager task cancelled successfully")
-        except Exception:
-            _LOGGER.exception("Error waiting for WebSocket task cancellation")
-
-    # Then disconnect the client
-    if websocket_client:
-        _LOGGER.debug("Disconnecting WebSocket client")
-        await websocket_client.disconnect()  # disconnect handles its own listener task
+        # Clean up start listener if it exists
+        start_listener_remove = entry_data.pop(START_LISTENER_REMOVE_KEY, None)
+        if start_listener_remove:
+            _LOGGER.debug("Removing HA start listener during unload.")
+            start_listener_remove()
 
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    # Remove data from hass.data
+    # Clean up hass.data[DOMAIN][entry.entry_id] only if unload succeeded
     if unload_ok:
-        # Pop the specific entry data
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-        # If the domain entry is now empty, remove the domain key itself
-        if not hass.data[DOMAIN]:
-            hass.data.pop(DOMAIN)
+        if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
+            hass.data[DOMAIN].pop(entry.entry_id)
+            _LOGGER.debug("Removed entry data for %s from hass.data", entry.entry_id)
+            # If this was the last entry, remove the domain key
+            if not hass.data[DOMAIN]:
+                hass.data.pop(DOMAIN)
+                _LOGGER.debug("Removed domain %s from hass.data", DOMAIN)
 
+    _LOGGER.info("BTicino integration entry %s unloaded: %s", entry.entry_id, unload_ok)
     return unload_ok
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry when options change."""
+    _LOGGER.info(
+        "Reloading BTicino integration entry due to options update: %s", entry.entry_id
+    )
+    # Explicitly call the reload function to ensure the unload/setup cycle runs
+    await hass.config_entries.async_reload(entry.entry_id)
+    # The listener registration itself ensures this function is called.
+    # The call above forces HA to unload and set up the entry again.

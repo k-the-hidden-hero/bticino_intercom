@@ -3,22 +3,45 @@
     "step": {
       "user": {
         "title": "BTicino Account Credentials",
-        "description": "Enter your Netatmo/BTicino account credentials and API keys.",
+        "description": "Enter your Netatmo/BTicino account credentials.",
         "data": {
           "username": "Username (Email)",
-          "password": "Password",
-          "client_id": "Client ID (API Key)",
-          "client_secret": "Client Secret"
+          "password": "Password"
+        }
+      },
+      "select_home": {
+        "title": "Select BTicino Home",
+        "description": "Multiple homes found for your account. Please select the home you want to add.",
+        "data": {
+          "home_id": "Home"
         }
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to BTicino/Netatmo API. Check your network connection.",
-      "invalid_auth": "Invalid username, password or API credentials.",
+      "cannot_connect": "Failed to connect to the BTicino/Netatmo API. Check your network connection.",
+      "invalid_auth": "Invalid username, password, or API credentials.",
       "unknown": "An unknown error occurred."
     },
     "abort": {
-      "already_configured": "Account already configured."
+      "already_configured": "Account is already configured.",
+      "no_homes_found": "No homes found for this BTicino account."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BTicino Light Options",
+        "description": "Configure how your BTicino lights behave",
+        "data": {
+          "light_as_lock": "Use lighting relay as lock (alternative setup)"
+        }
+      }
+    },
+    "abort": {
+        "cannot_connect": "Failed to connect, please try again later."
+    },
+    "error": {
+        "cannot_connect": "Failed to connect, please try again later."
     }
   },
   "entity": {

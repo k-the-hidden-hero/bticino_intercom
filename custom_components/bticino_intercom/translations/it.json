@@ -3,22 +3,45 @@
     "step": {
       "user": {
         "title": "Credenziali Account BTicino",
-        "description": "Inserisci le credenziali del tuo account Netatmo/BTicino e le chiavi API.",
+        "description": "Inserisci le credenziali del tuo account Netatmo/BTicino.",
         "data": {
           "username": "Nome utente (Email)",
-          "password": "Password",
-          "client_id": "Client ID (Chiave API)",
-          "client_secret": "Client Secret"
+          "password": "Password"
+        }
+      },
+      "select_home": {
+        "title": "Seleziona Casa BTicino",
+        "description": "Trovate più case per il tuo account. Seleziona la casa che vuoi aggiungere.",
+        "data": {
+          "home_id": "Casa"
         }
       }
     },
     "error": {
-      "cannot_connect": "Impossibile connettersi all'API BTicino/Netatmo. Controlla la connessione di rete.",
-      "invalid_auth": "Nome utente, password o credenziali API non valide.",
+      "cannot_connect": "Impossibile connettersi all'API BTicino/Netatmo. Controlla la tua connessione di rete.",
+      "invalid_auth": "Nome utente, password o credenziali API non validi.",
       "unknown": "Si è verificato un errore sconosciuto."
     },
     "abort": {
-      "already_configured": "Account già configurato."
+      "already_configured": "L'account è già configurato.",
+      "no_homes_found": "Nessuna casa trovata per questo account BTicino."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opzioni Luci BTicino",
+        "description": "Configura il comportamento delle tue luci BTicino",
+        "data": {
+          "light_as_lock": "Usa il relè dell'illuminazione come serratura (configurazione alternativa)"
+        }
+      }
+    },
+    "abort": {
+        "cannot_connect": "Impossibile connettersi, riprova più tardi."
+    },
+    "error": {
+        "cannot_connect": "Impossibile connettersi, riprova più tardi."
     }
   },
   "entity": {

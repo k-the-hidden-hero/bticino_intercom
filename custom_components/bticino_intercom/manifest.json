@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/k-the-hidden-hero/bticino_intercom/issues",
   "loggers": ["pybticino"],
   "requirements": ["pybticino>=1.0"],
-  "version": "v1.4"
+  "version": "v1.5"
 }
