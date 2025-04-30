@@ -72,6 +72,27 @@ class BticinoLight(CoordinatorEntity, LightEntity):
         module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
         return bool(module_data.get("status") == "on")
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return device specific state attributes."""
+        if not self.coordinator.data or "modules" not in self.coordinator.data:
+            return None
+        module_data = self.coordinator.data["modules"].get(self._module_id)
+        if not module_data:
+            return None
+
+        attrs = {
+            "module_id": self._module_id,
+            "bridge_id": self._bridge_id,
+            "variant": module_data.get("variant"),
+            "firmware_revision": module_data.get("firmware_revision"),
+            "reachable": module_data.get("reachable"),
+            "appliance_type": module_data.get("appliance_type"),
+            # Add other relevant attributes from module_data if needed
+        }
+        # Filter out None values
+        return {k: v for k, v in attrs.items() if v is not None}
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on."""
         if not self._bridge_id:
