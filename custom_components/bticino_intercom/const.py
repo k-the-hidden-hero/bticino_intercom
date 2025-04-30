@@ -45,6 +45,9 @@ DOOR_BELL_TYPES = [
     "BNEU",
 ]
 
+# Combine all module types
+MODULE_TYPES = BRIDGE_TYPES + LOCK_TYPES + LIGHT_TYPES + DOOR_BELL_TYPES
+
 # Push types from websocket
 PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
 PUSH_TYPE_WEBSOCKET_CONNECTION = (
@@ -61,6 +64,9 @@ EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
 
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"
+
+# Coordinator update interval (in minutes)
+UPDATE_INTERVAL = 5
 
 # Light specific constants
 LIGHT_AUTO_OFF_DELAY = 10  # seconds

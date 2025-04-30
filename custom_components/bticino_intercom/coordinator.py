@@ -2,25 +2,26 @@
 
 import asyncio
 import logging
-from typing import Any, Callable
-from datetime import timedelta, datetime, UTC  # Added datetime, UTC
-import copy  # Import deepcopy
+from typing import Any, Callable, Dict, Optional
+from datetime import timedelta, datetime, UTC
+import copy
 
 from pybticino import AsyncAccount, WebsocketClient, AuthHandler
 from pybticino.exceptions import PyBticinoException, ApiError, AuthError
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_USERNAME  # Needed for title fallback
+from homeassistant.const import (
+    CONF_USERNAME,
+    CONF_EMAIL,
+    CONF_PASSWORD,
+)
 from homeassistant.core import HomeAssistant, callback
 
-# Import device registry helper
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
-# Import dispatcher for signaling
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-# Import constants including the signal and event/push types
 from .const import (
     DOMAIN,
     SIGNAL_CALL_RECEIVED,
@@ -33,12 +34,13 @@ from .const import (
     DATA_LAST_EVENT,
     PUSH_TYPE_RTC,
     BRIDGE_TYPES,
+    MODULE_TYPES,
+    UPDATE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-# Inherit from DataUpdateCoordinator
 class BticinoIntercomCoordinator(DataUpdateCoordinator):
     """Coordinator to handle BTicino intercom data and WebSocket."""
 
@@ -52,27 +54,39 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         """Initialize the coordinator."""
         self.account = account
         self.websocket_client = websocket_client
-        # Removed _websocket_task attribute
 
-        # Call super().__init__
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN} Coordinator - {entry.entry_id}",
-            update_interval=timedelta(minutes=5),  # Update interval to 5 minutes
+            update_interval=timedelta(minutes=UPDATE_INTERVAL),
             update_method=self._async_update_data,
         )
-        # Data is initialized by super().__init__ calling update_method
+
         self.entry = entry
-        # Ensure self.data is initialized as a dictionary by the parent class
-        # Initialize with last_event and events_history keys
         self.data: dict[str, Any] = {
             "homes": {},
             "modules": {},
             DATA_LAST_EVENT: {},
             "events_history": {},
         }
-        self.home_id: str = entry.data["home_id"]  # Store selected home_id
+        self.home_id: str = entry.data["home_id"]
+        self.session = async_get_clientsession(hass)
+        self._home_name = None
+        self._normalized_home_name = None
+        self._main_device_id = None
+
+    @property
+    def home_name(self) -> str:
+        """Return the home name."""
+        return self._home_name or "unknown"
+
+    @property
+    def normalized_home_name(self) -> str:
+        """Return the normalized home name."""
+        if not self._normalized_home_name and self._home_name:
+            self._normalized_home_name = self._home_name.lower().replace(" ", "_")
+        return self._normalized_home_name or "unknown"
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the API, register devices, and return the combined data."""
@@ -81,12 +95,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         modules_data = {}
 
         try:
-            # 1. Fetch Topology (still needed to get all module details)
-            # Consider optimizing this if topology doesn't change often
             await self.account.async_update_topology()
             if not self.account.homes:
                 _LOGGER.warning("No homes found for this account.")
-                # Return empty structure matching final_data keys
                 return {
                     "homes": {},
                     "modules": {},
@@ -98,14 +109,23 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     f"Selected home_id {self.home_id} not found in account topology."
                 )
 
-            # Store topology data for the selected home and its modules
             selected_home_obj = self.account.homes[self.home_id]
             homes_data[self.home_id] = selected_home_obj.raw_data
+
+            # Find the main bridge module (BNC1)
+            bridge_module = None
             for module_obj in selected_home_obj.modules:
                 modules_data[module_obj.id] = module_obj.raw_data
+                if module_obj.raw_data.get("type") in BRIDGE_TYPES:
+                    bridge_module = module_obj
 
-            # 2. Fetch Status Data ONLY for the selected home
-            _LOGGER.debug("Fetching status for selected home %s", self.home_id)
+            if not bridge_module:
+                raise UpdateFailed("No bridge module found in the system")
+
+            # Store the bridge module ID as our main device ID
+            self._main_device_id = bridge_module.id
+
+            # Fetch Status Data
             try:
                 status_data = await self.account.async_get_home_status(self.home_id)
                 modules_status = (
@@ -115,75 +135,34 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(
                     "Failed to fetch status for home %s: %s", self.home_id, err
                 )
-                modules_status = []  # Continue with empty status on error
+                modules_status = []
 
+            # Update modules with status data
             for module_status_update in modules_status:
                 module_id = module_status_update.get("id")
                 if module_id and module_id in modules_data:
-                    # Merge status into existing module data from topology
                     for key, value in module_status_update.items():
-                        if key != "id":  # Don't overwrite id
+                        if key != "id":
                             modules_data[module_id][key] = value
-                elif module_id:
-                    _LOGGER.warning(
-                        "Module %s found in status but not in topology.", module_id
-                    )
-                    # Optionally add it if desired, but might indicate inconsistency
-                    # modules_data[module_id] = module_status_update
 
-            # 3. Register/Update Devices in Registry using the merged data
+            # Register/Update the main device in the registry
             device_registry = dr.async_get(self.hass)
-            processed_module_ids = set(
-                modules_data.keys()
-            )  # All modules found in topology/status
+            device_registry.async_get_or_create(
+                config_entry_id=self.entry.entry_id,
+                identifiers={(DOMAIN, self._main_device_id)},
+                manufacturer="BTicino",
+                model="Classe 100X16E",
+                name=f"BTicino Intercom - {self.home_name}",
+                sw_version=str(
+                    bridge_module.raw_data.get("firmware_name")
+                    or bridge_module.raw_data.get("firmware_revision", "Unknown")
+                ),
+            )
 
-            for module_id, module_data in modules_data.items():
-                # Construct device_info using the fully merged module_data
-                device_info = {
-                    "identifiers": {(DOMAIN, module_id)},
-                    "manufacturer": "BTicino",
-                    "model": module_data.get("type"),
-                    "name": module_data.get("name"),
-                    "sw_version": str(
-                        module_data.get("firmware_name")
-                        or module_data.get("firmware_revision")
-                    ),
-                    "hw_version": (
-                        str(module_data.get("hardware_version"))
-                        if module_data.get("hardware_version")
-                        else None
-                    ),
-                }
-                bridge_id = module_data.get("bridge")
-                if bridge_id:
-                    # Ensure the bridge device exists before setting via_device
-                    # This assumes bridge was processed in the loop already or exists from previous update
-                    if bridge_id in modules_data:
-                        device_info["via_device"] = (DOMAIN, bridge_id)
-                    else:
-                        _LOGGER.warning(
-                            "Bridge device %s not found for module %s",
-                            bridge_id,
-                            module_id,
-                        )
-
-                _LOGGER.debug(
-                    "Registering/Updating device %s with info: %s",
-                    module_id,
-                    device_info,
-                )
-                device_registry.async_get_or_create(
-                    config_entry_id=self.entry.entry_id, **device_info
-                )
-
-            # 4. Fetch Events ONLY for the selected home
+            # Fetch Events
             events_history_data = {}
-            _LOGGER.debug("Fetching events for selected home %s", self.home_id)
             try:
-                events_data = await self.account.async_get_events(
-                    self.home_id, size=20
-                )  # Fetch last 20 events
-                # Store events under the specific home_id key
+                events_data = await self.account.async_get_events(self.home_id, size=20)
                 events_history_data[self.home_id] = (
                     events_data.get("body", {}).get("home", {}).get("events", [])
                 )
@@ -191,19 +170,19 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(
                     "Failed to fetch events for home %s: %s", self.home_id, err
                 )
-                events_history_data[self.home_id] = []  # Store empty list on error
+                events_history_data[self.home_id] = []
 
-            # 5. Prepare final data structure to return (and store in self.data)
-            # Note: homes_data now only contains the selected home
             final_data = {
                 "homes": homes_data,
                 "modules": modules_data,
                 "events_history": events_history_data,
-                # Keep DATA_LAST_EVENT updated by websocket handler, not overwritten here
                 DATA_LAST_EVENT: self.data.get(DATA_LAST_EVENT, {}),
             }
-            _LOGGER.debug("Data update finished.")  # Simplified log
-            # _LOGGER.debug("Final data: %s", final_data) # Avoid logging potentially large data
+
+            if "name" in final_data["homes"][self.home_id]:
+                self._home_name = final_data["homes"][self.home_id]["name"]
+                _LOGGER.debug("Home name set to: %s", self._home_name)
+
             return final_data
 
         except AuthError as err:
@@ -213,8 +192,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.exception("Unexpected error during data fetch")
             raise UpdateFailed(f"Unexpected error: {err}") from err
-
-    # _process_status_update is now integrated into _async_update_data
 
     def _process_websocket_event(self, message: dict[str, Any]) -> bool:
         """Process event data from websocket and update self.data."""
@@ -389,3 +366,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             await self.async_request_refresh()
 
     # Removed async_start_websocket and async_stop_websocket methods
+
+    async def _create_account(self) -> Optional[Any]:
+        """Create a new account instance."""
+        try:
+            account = AsyncAccount(
+                self.entry.data[CONF_EMAIL],
+                self.entry.data[CONF_PASSWORD],
+                session=self.session,
+            )
+            await account.async_authenticate()
+            return account
+        except Exception as err:
+            _LOGGER.error("Error creating account: %s", err)
+            return None
