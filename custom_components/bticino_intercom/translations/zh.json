@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BTicino账户凭据",
+        "description": "输入您的Netatmo/BTicino账户凭据和API密钥。",
+        "data": {
+          "username": "用户名（电子邮件）",
+          "password": "密码",
+          "client_id": "客户端ID（API密钥）",
+          "client_secret": "客户端密钥"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接到BTicino/Netatmo API。请检查网络连接。",
+      "invalid_auth": "用户名、密码或API凭据无效。",
+      "unknown": "发生未知错误。"
+    },
+    "abort": {
+      "already_configured": "账户已配置。"
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "外门"
+      },
+      "internal_door": {
+         "name": "内门"
+      }
+    },
+     "binary_sensor": {
+       "call": {
+         "name": "呼叫"
+       }
+     }
+  }
+}

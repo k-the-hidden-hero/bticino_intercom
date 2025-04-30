@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "بيانات اعتماد حساب BTicino",
+        "description": "أدخل بيانات اعتماد حساب Netatmo/BTicino ومفاتيح API.",
+        "data": {
+          "username": "اسم المستخدم (البريد الإلكتروني)",
+          "password": "كلمة المرور",
+          "client_id": "معرف العميل (مفتاح API)",
+          "client_secret": "المفتاح السري"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "لا يمكن الاتصال بـ API BTicino/Netatmo. تحقق من اتصال الشبكة.",
+      "invalid_auth": "اسم المستخدم أو كلمة المرور أو بيانات اعتماد API غير صالحة.",
+      "unknown": "حدث خطأ غير معروف."
+    },
+    "abort": {
+      "already_configured": "تم تكوين الحساب بالفعل."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "الباب الخارجي"
+      },
+      "internal_door": {
+         "name": "الباب الداخلي"
+      }
+    },
+     "binary_sensor": {
+       "call": {
+         "name": "مكالمة"
+       }
+     }
+  }
+}

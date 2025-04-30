@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BTicino खाता प्रमाणपत्र",
+        "description": "अपने Netatmo/BTicino खाता प्रमाणपत्र और API कुंजियां दर्ज करें।",
+        "data": {
+          "username": "उपयोगकर्ता नाम (ईमेल)",
+          "password": "पासवर्ड",
+          "client_id": "क्लाइंट आईडी (API कुंजी)",
+          "client_secret": "क्लाइंट सीक्रेट"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "BTicino/Netatmo API से कनेक्ट नहीं हो सकता। अपना नेटवर्क कनेक्शन जांचें।",
+      "invalid_auth": "अमान्य उपयोगकर्ता नाम, पासवर्ड या API प्रमाणपत्र।",
+      "unknown": "एक अज्ञात त्रुटि हुई।"
+    },
+    "abort": {
+      "already_configured": "खाता पहले से ही कॉन्फ़िगर किया गया है।"
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "बाहरी दरवाजा"
+      },
+      "internal_door": {
+         "name": "आंतरिक दरवाजा"
+      }
+    },
+     "binary_sensor": {
+       "call": {
+         "name": "कॉल"
+       }
+     }
+  }
+}

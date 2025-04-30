@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BTicinoアカウント認証情報",
+        "description": "Netatmo/BTicinoアカウントの認証情報とAPIキーを入力してください。",
+        "data": {
+          "username": "ユーザー名（メールアドレス）",
+          "password": "パスワード",
+          "client_id": "クライアントID（APIキー）",
+          "client_secret": "クライアントシークレット"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "BTicino/Netatmo APIに接続できません。ネットワーク接続を確認してください。",
+      "invalid_auth": "ユーザー名、パスワード、またはAPI認証情報が無効です。",
+      "unknown": "不明なエラーが発生しました。"
+    },
+    "abort": {
+      "already_configured": "アカウントは既に設定されています。"
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "外部ドア"
+      },
+      "internal_door": {
+         "name": "内部ドア"
+      }
+    },
+     "binary_sensor": {
+       "call": {
+         "name": "通話"
+       }
+     }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Identifiants du Compte BTicino",
+        "description": "Entrez vos identifiants de compte Netatmo/BTicino et vos clés API.",
+        "data": {
+          "username": "Nom d'utilisateur (Email)",
+          "password": "Mot de passe",
+          "client_id": "ID Client (Clé API)",
+          "client_secret": "Clé Secrète"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter à l'API BTicino/Netatmo. Vérifiez votre connexion réseau.",
+      "invalid_auth": "Nom d'utilisateur, mot de passe ou identifiants API invalides.",
+      "unknown": "Une erreur inconnue s'est produite."
+    },
+    "abort": {
+      "already_configured": "Compte déjà configuré."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "Porte Extérieure"
+      },
+      "internal_door": {
+         "name": "Porte Intérieure"
+      }
+    },
+     "binary_sensor": {
+       "call": {
+         "name": "Appel"
+       }
+     }
+  }
+}

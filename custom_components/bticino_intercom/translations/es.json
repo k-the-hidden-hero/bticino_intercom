@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Credenciales de Cuenta BTicino",
+        "description": "Ingrese sus credenciales de cuenta Netatmo/BTicino y claves API.",
+        "data": {
+          "username": "Nombre de usuario (Correo electrónico)",
+          "password": "Contraseña",
+          "client_id": "ID de Cliente (Clave API)",
+          "client_secret": "Clave Secreta"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se puede conectar a la API BTicino/Netatmo. Verifique su conexión de red.",
+      "invalid_auth": "Nombre de usuario, contraseña o credenciales API no válidas.",
+      "unknown": "Se ha producido un error desconocido."
+    },
+    "abort": {
+      "already_configured": "Cuenta ya configurada."
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "Puerta Externa"
+      },
+      "internal_door": {
+         "name": "Puerta Interna"
+      }
+    },
+     "binary_sensor": {
+       "call": {
+         "name": "Llamada"
+       }
+     }
+  }
+}
