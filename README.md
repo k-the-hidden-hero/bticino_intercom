@@ -66,6 +66,16 @@ Configuration is done entirely through the Home Assistant user interface:
 6.  If multiple "Homes" are found associated with your account, you will be prompted to select the correct one. 🏡
 7.  The integration will set up entities for your compatible locks and external units. 🎉
 
+### Light as Lock Option
+
+Some BTicino installations use the lighting relay to control the door lock instead of a dedicated lock module. If this is your case:
+
+1. Go to the integration settings
+2. Click on "Configure"
+3. Enable the "Use lighting relay as lock" option
+
+This will make the integration use the lighting relay to control the door lock instead of looking for a dedicated lock module.
+
 ## 🧩 Supported Entities
 
 The integration currently creates the following entities based on the modules discovered in your selected BTicino Home:
