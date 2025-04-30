@@ -23,10 +23,10 @@
   },
   "entity": {
     "lock": {
-      "porta_esterna": {
+      "external_door": {
         "name": "Porta Esterna"
       },
-      "porta_interna": {
+      "internal_door": {
          "name": "Porta Interna"
       }
     },
