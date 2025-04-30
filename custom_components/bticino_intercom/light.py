@@ -48,12 +48,10 @@ class BticinoLight(CoordinatorEntity, LightEntity):
         super().__init__(coordinator)
         self._module_id = module_id
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
-        self._attr_name = module_data.get(
-            "name", "Light"
-        )  # Simplified name as it will be shown under the device
+        self._attr_name = module_data.get("name", "Light")
         self._attr_unique_id = f"{coordinator.entry.entry_id}_light_{module_id}"
-        self._attr_should_poll = True
-        # Store bridge_id for later use
+        # Initialize state based on coordinator data
+        self._attr_is_on = bool(module_data.get("status") == "on")
         self._bridge_id = module_data.get("bridge")
 
     @property
@@ -64,13 +62,22 @@ class BticinoLight(CoordinatorEntity, LightEntity):
         )
 
     @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        # Check coordinator update success first
+        if not self.coordinator.last_update_success:
+            return False
+        # Check specific module reachability
+        module_data = self.coordinator.data.get("modules", {}).get(self._module_id)
+        if not module_data:
+            return False  # Module disappeared?
+        return module_data.get("reachable", True)  # Assume reachable if key missing
+
+    @property
     def is_on(self) -> bool:
         """Return true if light is on."""
-        if not self.coordinator.data:
-            return False
-
-        module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
-        return bool(module_data.get("status") == "on")
+        # Return internal state which is updated optimistically and by coordinator
+        return self._attr_is_on
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -88,16 +95,20 @@ class BticinoLight(CoordinatorEntity, LightEntity):
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
             "appliance_type": module_data.get("appliance_type"),
-            # Add other relevant attributes from module_data if needed
         }
-        # Filter out None values
         return {k: v for k, v in attrs.items() if v is not None}
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the light on."""
+        """Turn the light on with optimistic update."""
         if not self._bridge_id:
             _LOGGER.error("Bridge ID not found for light %s", self._module_id)
             return
+
+        # Optimistic update
+        self._attr_is_on = True
+        self.async_write_ha_state()  # Logbook entry!
+
+        # Send command to API
         try:
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
@@ -105,15 +116,25 @@ class BticinoLight(CoordinatorEntity, LightEntity):
                 bridge_id=self._bridge_id,
                 state={"on": True},
             )
+            # Request refresh to confirm state eventually
             await self.coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.error("Failed to turn on light %s: %s", self._module_id, err)
+            # Revert optimistic state on error
+            self._attr_is_on = False
+            self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the light off."""
+        """Turn the light off with optimistic update."""
         if not self._bridge_id:
             _LOGGER.error("Bridge ID not found for light %s", self._module_id)
             return
+
+        # Optimistic update
+        self._attr_is_on = False
+        self.async_write_ha_state()  # Logbook entry!
+
+        # Send command to API
         try:
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
@@ -121,11 +142,19 @@ class BticinoLight(CoordinatorEntity, LightEntity):
                 bridge_id=self._bridge_id,
                 state={"on": False},
             )
+            # Request refresh to confirm state eventually
             await self.coordinator.async_request_refresh()
         except Exception as err:
             _LOGGER.error("Failed to turn off light %s: %s", self._module_id, err)
+            # Revert optimistic state on error
+            self._attr_is_on = True
+            self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+        # Update internal state from coordinator data
+        module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
+        self._attr_is_on = bool(module_data.get("status") == "on")
+        # Let HA know state + attributes might have changed
         self.async_write_ha_state()

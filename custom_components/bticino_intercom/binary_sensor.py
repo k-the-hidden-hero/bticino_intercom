@@ -113,6 +113,8 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
             # If 0 or >1 locks, keep the binary sensor module name determined earlier
 
         self._attr_name = entity_base_name
+        # Initialize availability
+        self._attr_available = binary_sensor_module_data.get("reachable", True)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -120,6 +122,15 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
         )
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        # Check coordinator update success first
+        if not self.coordinator.last_update_success:
+            return False
+        # Return internal state updated by _handle_coordinator_update
+        return self._attr_available
 
     @property
     def is_on(self) -> bool:
