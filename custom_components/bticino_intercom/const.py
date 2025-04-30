@@ -4,7 +4,12 @@ from homeassistant.const import Platform
 
 DOMAIN = "bticino_intercom"
 
-PLATFORMS: list[Platform] = [Platform.LOCK, Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.LOCK,
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.LIGHT,
+]
 
 # Configuration constants
 CONF_USERNAME = "username"
@@ -30,7 +35,10 @@ BRIDGE_TYPES = [
 
 LOCK_TYPES = [
     "BNDL",
-    "BNSL"
+]
+
+LIGHT_TYPES = [
+    "BNSL",
 ]
 
 DOOR_BELL_TYPES = [
@@ -39,7 +47,9 @@ DOOR_BELL_TYPES = [
 
 # Push types from websocket
 PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
-PUSH_TYPE_WEBSOCKET_CONNECTION = f"{BRIDGE_TYPES[0]}-websocket_connection"  # Used for RTC events
+PUSH_TYPE_WEBSOCKET_CONNECTION = (
+    f"{BRIDGE_TYPES[0]}-websocket_connection"  # Used for RTC events
+)
 
 # Dispatcher signal
 SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
@@ -51,3 +61,6 @@ EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
 
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"
+
+# Light specific constants
+LIGHT_AUTO_OFF_DELAY = 10  # seconds
