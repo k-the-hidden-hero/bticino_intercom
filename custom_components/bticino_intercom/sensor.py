@@ -97,11 +97,15 @@ class BticinoLastEventSensor(
 
         # Update state and attributes
         self._attr_native_value = last_event.get("type")
+        timestamp = last_event.get("timestamp")
+        if isinstance(timestamp, datetime):
+            timestamp_iso = timestamp.isoformat()
+        else:
+            timestamp_iso = datetime.fromtimestamp(timestamp or 0, tz=timezone.utc).isoformat()
+            
         self._attr_extra_state_attributes = {
-            "timestamp": last_event.get("timestamp"),
-            "timestamp_iso": datetime.fromtimestamp(
-                last_event.get("timestamp", 0), tz=timezone.utc
-            ).isoformat(),
+            "timestamp": timestamp,
+            "timestamp_iso": timestamp_iso,
             "event_module_id": last_event.get("module_id"),
             "event_module_name": last_event.get("module_name"),
             "raw_event_details": last_event.get("raw_event"),
