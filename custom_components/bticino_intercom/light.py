@@ -2,6 +2,7 @@
 
 import logging
 from typing import Any, Dict, Optional
+from datetime import datetime, timezone, timedelta
 
 from homeassistant.components.light import LightEntity, ColorMode
 from homeassistant.components.lock import LockEntity, LockEntityFeature
@@ -11,6 +12,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.event import async_call_later
+from homeassistant.util.dt import utc_from_timestamp
 
 from .const import (
     DOMAIN,
@@ -18,6 +20,7 @@ from .const import (
     SUBTYPE_STAIRCASE_LIGHT,
 )
 from .coordinator import BticinoIntercomCoordinator
+from .utils import format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +92,8 @@ async def async_setup_entry(
 class BticinoLight(CoordinatorEntity, LightEntity):
     """Representation of a BTicino light."""
 
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:light-recessed"
     _attr_supported_color_modes = {ColorMode.ONOFF}
     _attr_color_mode = ColorMode.ONOFF
 
@@ -106,8 +111,15 @@ class BticinoLight(CoordinatorEntity, LightEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info."""
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}"
+            if self.coordinator.home_name
+            else "BTicino Intercom"
+        )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
         )
 
     @property
@@ -137,6 +149,9 @@ class BticinoLight(CoordinatorEntity, LightEntity):
         if not module_data:
             return None
 
+        uptime_sec = module_data.get("uptime")
+        last_interaction_ts = module_data.get("last_user_interaction")
+
         attrs = {
             "module_id": self._module_id,
             "bridge_id": self._bridge_id,
@@ -144,8 +159,10 @@ class BticinoLight(CoordinatorEntity, LightEntity):
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
             "configured": module_data.get("configured"),
-            "last_user_interaction": module_data.get("last_user_interaction"),
-            "uptime": module_data.get("uptime"),
+            "last_user_interaction": last_interaction_ts,
+            "last_user_interaction_iso": _format_timestamp_iso(last_interaction_ts),
+            "uptime": uptime_sec,
+            "uptime_readable": _format_uptime_readable(uptime_sec),
             "appliance_type": module_data.get("appliance_type"),
         }
         return {k: v for k, v in attrs.items() if v is not None}

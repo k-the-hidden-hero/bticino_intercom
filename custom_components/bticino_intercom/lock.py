@@ -3,6 +3,7 @@
 import logging
 from typing import Any, Dict, Optional, Callable
 import asyncio
+from datetime import datetime, timezone, timedelta
 
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -11,6 +12,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.event import async_call_later
+from homeassistant.util.dt import utc_from_timestamp
 
 from .const import (
     DOMAIN,
@@ -21,6 +23,7 @@ from .const import (
     Platform,
 )
 from .coordinator import BticinoIntercomCoordinator
+from .utils import format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +104,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
     """Representation of a BTicino lock."""
 
     _attr_supported_features = LockEntityFeature.OPEN
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the lock."""
@@ -117,8 +121,16 @@ class BticinoLock(CoordinatorEntity, LockEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info."""
+        # Use coordinator.home_name for the device name if available
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}"
+            if self.coordinator.home_name
+            else "BTicino Intercom"
+        )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
         )
 
     @property
@@ -152,6 +164,9 @@ class BticinoLock(CoordinatorEntity, LockEntity):
         if not module_data:
             return None
 
+        uptime_sec = module_data.get("uptime")
+        last_interaction_ts = module_data.get("last_user_interaction")
+
         attrs = {
             "module_id": self._module_id,
             "bridge_id": self._bridge_id,
@@ -159,11 +174,13 @@ class BticinoLock(CoordinatorEntity, LockEntity):
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
             "configured": module_data.get("configured"),
-            "last_user_interaction": module_data.get("last_user_interaction"),
+            "last_user_interaction": last_interaction_ts,
+            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
             "appliance_type": module_data.get("appliance_type"),
             "local_ipv4": module_data.get("local_ipv4"),
             "wifi_strength": module_data.get("wifi_strength"),
-            "uptime": module_data.get("uptime"),
+            "uptime": uptime_sec,
+            "uptime_readable": format_uptime_readable(uptime_sec),
         }
         return {k: v for k, v in attrs.items() if v is not None}
 
@@ -274,6 +291,7 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
     """Representation of a BTicino light used as a lock."""
 
     _attr_supported_features = LockEntityFeature.OPEN
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the light as lock."""
@@ -295,8 +313,15 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
     def device_info(self) -> DeviceInfo:
         """Return device info."""
         # Associate with the same device as the coordinator
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}"
+            if self.coordinator.home_name
+            else "BTicino Intercom"
+        )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
         )
 
     @property
@@ -328,6 +353,9 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
         if not module_data:
             return None
 
+        uptime_sec = module_data.get("uptime")
+        last_interaction_ts = module_data.get("last_user_interaction")
+
         attrs = {
             "module_id": self._module_id,
             "bridge_id": self._bridge_id,
@@ -335,8 +363,10 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
             "configured": module_data.get("configured"),
-            "last_user_interaction": module_data.get("last_user_interaction"),
-            "uptime": module_data.get("uptime"),
+            "last_user_interaction": last_interaction_ts,
+            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
+            "uptime": uptime_sec,
+            "uptime_readable": format_uptime_readable(uptime_sec),
             "appliance_type": module_data.get("appliance_type"),
             "local_ipv4": module_data.get("local_ipv4"),
             "wifi_strength": module_data.get("wifi_strength"),

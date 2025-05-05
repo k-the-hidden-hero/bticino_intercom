@@ -40,31 +40,9 @@ SUBTYPE_TO_PLATFORM = {
     SUBTYPE_EXTERNAL_UNIT: Platform.BINARY_SENSOR,  # Assuming external unit acts as a doorbell sensor
 }
 
-# Deprecated Type Lists (BRIDGE_TYPES kept for websocket event check)
-# BRIDGE_TYPES = [
-#     "BNC1",
-# ]
-
-# LOCK_TYPES = [
-#     "BNDL",
-# ]
-#
-# LIGHT_TYPES = [
-#     "BNSL",
-# ]
-#
-# DOOR_BELL_TYPES = [
-#     "BNEU",
-# ]
-
-# Combine all module types (consider removing or adjusting if only variant is used)
-# MODULE_TYPES = BRIDGE_TYPES + LOCK_TYPES + LIGHT_TYPES + DOOR_BELL_TYPES
 
 # Push types from websocket
 PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
-# PUSH_TYPE_WEBSOCKET_CONNECTION = (
-#     f"{BRIDGE_TYPES[0]}-websocket_connection"  # Might need adjustment if bridge ID logic changes how we reference it
-# )
 
 # Dispatcher signal
 SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
@@ -85,3 +63,9 @@ LIGHT_AUTO_OFF_DELAY = 10  # seconds
 
 # Lock specific constants
 LOCK_RELOCK_DELAY = 5  # seconds
+
+# Call sensor specific constants
+CALL_SENSOR_TIMEOUT = 30
+
+# Camera specific constants
+IMAGE_CACHE_SECONDS = 300  # 5 minutes

@@ -5,6 +5,7 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/k-the-hidden-hero/bticino_intercom",
+  "domains": ["lock", "light", "binary_sensor", "sensor", "camera"],
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/k-the-hidden-hero/bticino_intercom/issues",
   "loggers": ["pybticino"],

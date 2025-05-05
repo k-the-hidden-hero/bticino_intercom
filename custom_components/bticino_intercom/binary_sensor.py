@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any, Callable, Dict, List, Optional
 from contextlib import suppress  # Import suppress for async_will_remove_from_hass
+from datetime import datetime, timezone, timedelta  # Added datetime etc
 
 from pybticino import AsyncAccount
 
@@ -19,6 +20,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
+from homeassistant.util.dt import utc_from_timestamp  # Added
 
 # Import the actual coordinator and signal
 from .coordinator import BticinoIntercomCoordinator
@@ -30,12 +32,13 @@ from .const import (
     SIGNAL_CALL_RECEIVED,
     SUBTYPE_EXTERNAL_UNIT,
     SUBTYPE_DOORLOCK,
+    CALL_SENSOR_TIMEOUT,
 )  # Remove unused consts
+from .utils import format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
 
 # How long the sensor stays 'on' after a call is detected (in seconds)
-CALL_SENSOR_TIMEOUT = 30
 
 
 async def async_setup_entry(
@@ -91,39 +94,30 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
-    """Representation of a BTicino Intercom call binary sensor."""
+class BticinoCallBinarySensor(
+    CoordinatorEntity[BticinoIntercomCoordinator], BinarySensorEntity
+):
+    """Representation of a BTicino call sensor."""
+
+    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY  # Or SOUND?
+    _attr_icon = "mdi:doorbell-video"
+    _attr_has_entity_name = True  # Added
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
-        """Initialize the binary sensor."""
+        """Initialize the call sensor."""
         super().__init__(coordinator)
         self._module_id = module_id
-        self._attr_device_class = BinarySensorDeviceClass.OCCUPANCY
-        self._attr_extra_state_attributes = {}
-        self._attr_icon = "mdi:phone-in-talk"
-        self._attr_name = (
-            f"Call {module_id}"  # Simplified name as it will be shown under the device
-        )
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_call_{module_id}"
-        self._attr_should_poll = True
-        self._turn_off_canceller = None
-        # Store bridge_id for later use in attributes
-        self._bridge_id = (
-            coordinator.data.get("modules", {}).get(module_id, {}).get("bridge")
-        )
+        self._attr_unique_id = f"{module_id}_call"
+        # Determine entity name with priority: Module Name > Single Lock Name > "Call"
+        module_data = coordinator.data.get("modules", {}).get(module_id, {})
+        entity_name = module_data.get("name")
 
-        # Find associated locks and determine name
+        # Initialize bridge_id and associated_lock_ids early
+        self._bridge_id = module_data.get("bridge")
         self._associated_lock_ids: List[str] = []
-        binary_sensor_module_data = coordinator.data.get("modules", {}).get(
-            module_id, {}
-        )
-        self._bridge_id = binary_sensor_module_data.get("bridge")
-        entity_base_name = (
-            binary_sensor_module_data.get("name") or f"Call {self._module_id}"
-        )
+        found_locks_data: List[Dict[str, Any]] = []  # Store lock data for name check
 
         if self._bridge_id:
-            found_locks = []
             for other_module_id, other_module_data in coordinator.data.get(
                 "modules", {}
             ).items():
@@ -139,26 +133,39 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
                     other_module_data.get("bridge") == self._bridge_id
                     and other_subtype == SUBTYPE_DOORLOCK
                 ):
-                    found_locks.append(other_module_data)
                     self._associated_lock_ids.append(other_module_id)
+                    found_locks_data.append(other_module_data)  # Store lock data
 
-            if len(found_locks) == 1:
-                lock_name = found_locks[0].get("name")
-                if lock_name:
-                    entity_base_name = (
-                        f"Call {lock_name}"  # Use associated lock name if unique
-                    )
-            # If 0 or >1 locks, keep the binary sensor module name determined earlier
+        # If module name is missing or seems generic (like the ID), try lock name
+        if not entity_name or entity_name == module_id:
+            if len(found_locks_data) == 1:
+                lock_name = found_locks_data[0].get("name")
+                if lock_name and lock_name != found_locks_data[0].get(
+                    "id"
+                ):  # Check if lock name is valid
+                    entity_name = lock_name  # Use the lock's name
 
-        self._attr_name = entity_base_name
-        # Initialize availability
-        self._attr_available = binary_sensor_module_data.get("reachable", True)
+        # If still no valid name, default to "Call"
+        if not entity_name or entity_name == module_id:
+            entity_name = "Call"
+
+        self._attr_name = entity_name
+
+        # Initial state based on coordinator data
+        self._update_state()
 
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info."""
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}"
+            if self.coordinator.home_name
+            else "BTicino Intercom"
+        )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
         )
 
     @property
@@ -217,6 +224,9 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
         else:
             self._attr_available = module_data.get("reachable", True)
 
+        uptime_sec = module_data.get("uptime")
+        last_interaction_ts = module_data.get("last_user_interaction")
+
         # Start with generic module attributes
         attrs = {
             "module_id": self._module_id,
@@ -224,6 +234,12 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
             "variant": module_data.get("variant"),
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
+            "configured": module_data.get("configured"),
+            "last_user_interaction": last_interaction_ts,
+            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
+            "uptime": uptime_sec,
+            "uptime_readable": format_uptime_readable(uptime_sec),
+            "websocket_connected": module_data.get("websocket_connected"),
             "appliance_type": module_data.get("appliance_type"),
             "associated_locks": self._associated_lock_ids,
         }
@@ -262,11 +278,14 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
                         vignette_url = vignette_data.get("url")
                         vignette_expires_at = vignette_data.get("expires_at")
 
+            call_start_ts = latest_call_event.get("start")
+            call_end_ts = latest_call_event.get("end")
+
             attrs.update(
                 {
                     "call_id": latest_call_event.get("id"),
-                    "call_start": latest_call_event.get("start"),
-                    "call_end": latest_call_event.get("end"),
+                    "call_start": call_start_ts,
+                    "call_end": call_end_ts,
                     "call_duration": latest_call_event.get("duration"),
                     "call_type": latest_call_event.get("call_type"),
                     "call_status": latest_call_event.get("status"),
@@ -274,6 +293,14 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
                     "snapshot_expires_at": snapshot_expires_at,
                     "vignette_url": vignette_url,
                     "vignette_expires_at": vignette_expires_at,
+                    "call_start_iso": format_timestamp_iso(call_start_ts),
+                    "call_end_iso": format_timestamp_iso(call_end_ts),
+                    "snapshot_expires_at_iso": format_timestamp_iso(
+                        snapshot_expires_at
+                    ),
+                    "vignette_expires_at_iso": format_timestamp_iso(
+                        vignette_expires_at
+                    ),
                 }
             )
 

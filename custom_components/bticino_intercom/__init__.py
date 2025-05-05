@@ -19,6 +19,7 @@ from homeassistant.const import (
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
     EVENT_HOMEASSISTANT_START,
+    Platform,
 )
 from homeassistant.core import (
     HomeAssistant,
@@ -42,6 +43,15 @@ WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
 START_LISTENER_REMOVE_KEY = "start_listener_remove"  # Re-add key for listener removal
+
+# List the platforms that need to be set up
+PLATFORMS: list[Platform] = [
+    Platform.LOCK,
+    Platform.LIGHT,
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.CAMERA,  # Added camera
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -302,7 +312,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         start_listener_remove = entry_data.pop(START_LISTENER_REMOVE_KEY, None)
         if start_listener_remove:
             _LOGGER.debug("Removing HA start listener during unload.")
-            start_listener_remove()
+            try:
+                start_listener_remove()
+            except ValueError:
+                _LOGGER.debug("Listener was already removed.")
+            except Exception as exc:  # Catch other potential errors during removal
+                _LOGGER.warning("Error removing start listener: %s", exc)
 
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
