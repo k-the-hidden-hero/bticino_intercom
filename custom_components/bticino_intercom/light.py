@@ -160,9 +160,9 @@ class BticinoLight(CoordinatorEntity, LightEntity):
             "reachable": module_data.get("reachable"),
             "configured": module_data.get("configured"),
             "last_user_interaction": last_interaction_ts,
-            "last_user_interaction_iso": _format_timestamp_iso(last_interaction_ts),
+            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
             "uptime": uptime_sec,
-            "uptime_readable": _format_uptime_readable(uptime_sec),
+            "uptime_readable": format_uptime_readable(uptime_sec),
             "appliance_type": module_data.get("appliance_type"),
         }
         return {k: v for k, v in attrs.items() if v is not None}
