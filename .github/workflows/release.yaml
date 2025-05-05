@@ -16,7 +16,12 @@ jobs:
     steps:
       - name: Checkout code 🛎️
         uses: actions/checkout@v4
-
+      - uses: "home-assistant/actions/hassfest@master"
+        name: HassFest!
+      - name: HACS validation
+        uses: "hacs/action@main"
+        with:
+          category: "integration"
       - name: Get version from tag 🏷️
         id: get_version
         # Extract the version number from the tag (removes 'refs/tags/')
