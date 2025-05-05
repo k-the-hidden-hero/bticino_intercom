@@ -12,7 +12,14 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.event import async_call_later
 
-from .const import DOMAIN, LOCK_TYPES, LOCK_RELOCK_DELAY, LIGHT_TYPES
+from .const import (
+    DOMAIN,
+    LOCK_RELOCK_DELAY,
+    SUBTYPE_DOORLOCK,
+    SUBTYPE_STAIRCASE_LIGHT,
+    SUBTYPE_TO_PLATFORM,
+    Platform,
+)
 from .coordinator import BticinoIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,26 +39,55 @@ async def async_setup_entry(
 
     entities = []
     if coordinator.data and "modules" in coordinator.data:
+        _LOGGER.debug(
+            f"Lock Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
+        )
         for module_id, module_data in coordinator.data["modules"].items():
-            module_type = module_data.get("type")
+            variant = module_data.get("variant")
+            subtype = None
+            _LOGGER.debug(
+                f"Lock Setup: Checking module {module_id}, Variant: {variant}"
+            )
+            if variant and ":" in variant:
+                try:
+                    subtype = variant.split(":", 1)[1]
+                    _LOGGER.debug(f"Lock Setup: Extracted subtype: {subtype}")
+                except IndexError:
+                    _LOGGER.warning(
+                        "Could not parse subtype from variant '%s' for module %s",
+                        variant,
+                        module_id,
+                    )
+                    subtype = None  # Ensure subtype is None if split fails
 
-            # Create standard lock entity for lock types
-            if module_type in LOCK_TYPES:
-                _LOGGER.debug("Found standard lock module: %s", module_id)
+            # Check if the subtype corresponds to a lock
+            if subtype == SUBTYPE_DOORLOCK:
+                _LOGGER.debug("Found lock module (via variant subtype): %s", module_id)
                 entities.append(BticinoLock(coordinator, module_id))
 
-            # Create light-as-lock entity for light types if option is enabled
-            elif module_type in LIGHT_TYPES and light_as_lock:
+            # Check if the subtype corresponds to a light and light_as_lock is enabled
+            elif subtype == SUBTYPE_STAIRCASE_LIGHT and light_as_lock:
                 _LOGGER.debug(
-                    "Found light module %s, representing as lock (light_as_lock=True).",
+                    "Found light module %s (via variant subtype), representing as lock (light_as_lock=True).",
                     module_id,
                 )
                 entities.append(BticinoLightAsLock(coordinator, module_id))
-            elif module_type in LIGHT_TYPES and not light_as_lock:
+            elif subtype == SUBTYPE_STAIRCASE_LIGHT and not light_as_lock:
                 _LOGGER.debug(
-                    "Found light module %s, but configured as light. Skipping lock entity creation.",
+                    "Found light module %s (via variant subtype), but configured as light. Skipping lock entity creation.",
                     module_id,
                 )
+            elif subtype:
+                _LOGGER.debug(
+                    f"Lock Setup: Module {module_id} subtype '{subtype}' did not match expected lock/light subtypes."
+                )
+            # Optionally, log modules with unknown/missing variants if needed for debugging
+            elif not subtype and variant is not None:
+                _LOGGER.debug(
+                    f"Lock Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
+                )
+            # else: # subtype is None and variant is None
+            #     _LOGGER.debug(f"Lock Setup: Module {module_id} has no variant field.") # Potentially too verbose
 
     if not entities:
         _LOGGER.debug(
@@ -122,6 +158,8 @@ class BticinoLock(CoordinatorEntity, LockEntity):
             "variant": module_data.get("variant"),
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
+            "configured": module_data.get("configured"),
+            "last_user_interaction": module_data.get("last_user_interaction"),
             "appliance_type": module_data.get("appliance_type"),
             "local_ipv4": module_data.get("local_ipv4"),
             "wifi_strength": module_data.get("wifi_strength"),
@@ -296,7 +334,12 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             "variant": module_data.get("variant"),
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
+            "configured": module_data.get("configured"),
+            "last_user_interaction": module_data.get("last_user_interaction"),
+            "uptime": module_data.get("uptime"),
             "appliance_type": module_data.get("appliance_type"),
+            "local_ipv4": module_data.get("local_ipv4"),
+            "wifi_strength": module_data.get("wifi_strength"),
             "represented_as": "lock",  # Indicate this light is acting as a lock
         }
         return {k: v for k, v in attrs.items() if v is not None}

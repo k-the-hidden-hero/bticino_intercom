@@ -12,7 +12,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.event import async_call_later
 
-from .const import DOMAIN, LIGHT_TYPES, LOCK_RELOCK_DELAY
+from .const import (
+    DOMAIN,
+    LOCK_RELOCK_DELAY,
+    SUBTYPE_STAIRCASE_LIGHT,
+)
 from .coordinator import BticinoIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,18 +35,47 @@ async def async_setup_entry(
 
     entities = []
     if coordinator.data and "modules" in coordinator.data:
+        _LOGGER.debug(
+            f"Light Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
+        )
         for module_id, module_data in coordinator.data["modules"].items():
-            # Only create a standard light entity if the type matches AND light_as_lock is False
-            if module_data.get("type") in LIGHT_TYPES and not light_as_lock:
+            variant = module_data.get("variant")
+            subtype = None
+            _LOGGER.debug(
+                f"Light Setup: Checking module {module_id}, Variant: {variant}"
+            )
+            if variant and ":" in variant:
+                try:
+                    subtype = variant.split(":", 1)[1]
+                    _LOGGER.debug(f"Light Setup: Extracted subtype: {subtype}")
+                except IndexError:
+                    _LOGGER.warning(
+                        "Could not parse subtype from variant '%s' for module %s",
+                        variant,
+                        module_id,
+                    )
+                    subtype = None
+
+            # Only create light entity if subtype matches AND light_as_lock is False
+            if subtype == SUBTYPE_STAIRCASE_LIGHT and not light_as_lock:
                 _LOGGER.debug(
-                    "Found light module %s, representing as standard light.",
+                    "Found light module %s (via variant subtype), representing as standard light.",
                     module_id,
                 )
                 entities.append(BticinoLight(coordinator, module_id))
-            elif module_data.get("type") in LIGHT_TYPES and light_as_lock:
+            elif subtype == SUBTYPE_STAIRCASE_LIGHT and light_as_lock:
                 _LOGGER.debug(
-                    "Found light module %s, but configured as lock. Skipping light entity creation.",
+                    "Found light module %s (via variant subtype), but configured as lock. Skipping light entity creation.",
                     module_id,
+                )
+            elif subtype:
+                _LOGGER.debug(
+                    f"Light Setup: Module {module_id} subtype '{subtype}' did not match expected light subtype."
+                )
+            # Optionally log other subtypes or missing variants
+            elif not subtype and variant is not None:
+                _LOGGER.debug(
+                    f"Light Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
                 )
 
     if not entities:
@@ -110,6 +143,9 @@ class BticinoLight(CoordinatorEntity, LightEntity):
             "variant": module_data.get("variant"),
             "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
+            "configured": module_data.get("configured"),
+            "last_user_interaction": module_data.get("last_user_interaction"),
+            "uptime": module_data.get("uptime"),
             "appliance_type": module_data.get("appliance_type"),
         }
         return {k: v for k, v in attrs.items() if v is not None}

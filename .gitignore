@@ -1,3 +1,5 @@
 custom_components/bticino_intercom/__pycache__
 .clinerules/home-assistant-developers.home-assistant.md
 logs
+home-assistant.log
+example_payload.json

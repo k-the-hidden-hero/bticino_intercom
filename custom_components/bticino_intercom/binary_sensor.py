@@ -28,8 +28,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     DOMAIN,
     SIGNAL_CALL_RECEIVED,
-    DOOR_BELL_TYPES,
-    LOCK_TYPES,
+    SUBTYPE_EXTERNAL_UNIT,
+    SUBTYPE_DOORLOCK,
 )  # Remove unused consts
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,10 +50,40 @@ async def async_setup_entry(
 
     entities = []
     if coordinator.data and "modules" in coordinator.data:
+        _LOGGER.debug(
+            f"Binary Sensor Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
+        )
         for module_id, module_data in coordinator.data["modules"].items():
-            if module_data.get("type") in DOOR_BELL_TYPES:
-                _LOGGER.debug("Found external unit module: %s", module_id)
+            variant = module_data.get("variant")
+            subtype = None
+            _LOGGER.debug(
+                f"Binary Sensor Setup: Checking module {module_id}, Variant: {variant}"
+            )
+            if variant and ":" in variant:
+                try:
+                    subtype = variant.split(":", 1)[1]
+                    _LOGGER.debug(f"Binary Sensor Setup: Extracted subtype: {subtype}")
+                except IndexError:
+                    _LOGGER.warning(
+                        "Could not parse subtype from variant '%s' for module %s",
+                        variant,
+                        module_id,
+                    )
+                    subtype = None
+
+            if subtype == SUBTYPE_EXTERNAL_UNIT:
+                _LOGGER.debug(
+                    "Found external unit module (via variant subtype): %s", module_id
+                )
                 entities.append(BticinoCallBinarySensor(coordinator, module_id))
+            elif subtype:
+                _LOGGER.debug(
+                    f"Binary Sensor Setup: Module {module_id} subtype '{subtype}' did not match expected external unit subtype."
+                )
+            elif not subtype and variant is not None:
+                _LOGGER.debug(
+                    f"Binary Sensor Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
+                )
 
     if not entities:
         _LOGGER.debug("No BTicino external unit modules found")
@@ -97,9 +127,17 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
             for other_module_id, other_module_data in coordinator.data.get(
                 "modules", {}
             ).items():
+                other_variant = other_module_data.get("variant")
+                other_subtype = None
+                if other_variant and ":" in other_variant:
+                    try:
+                        other_subtype = other_variant.split(":", 1)[1]
+                    except IndexError:
+                        other_subtype = None
+
                 if (
                     other_module_data.get("bridge") == self._bridge_id
-                    and other_module_data.get("type") in LOCK_TYPES
+                    and other_subtype == SUBTYPE_DOORLOCK
                 ):
                     found_locks.append(other_module_data)
                     self._associated_lock_ids.append(other_module_id)
@@ -142,7 +180,10 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
         if not self.coordinator.data:
             return False
 
-        events = self.coordinator.data.get("events", [])
+        # Access events history correctly
+        events = self.coordinator.data.get("events_history", {}).get(
+            self.coordinator.home_id, []
+        )
         if not events:
             return False
 
@@ -188,7 +229,10 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
         }
 
         # Find the latest call event specific to this module and add its details
-        events = self.coordinator.data.get("events", [])
+        # Access events history correctly
+        events = self.coordinator.data.get("events_history", {}).get(
+            self.coordinator.home_id, []
+        )
         latest_call_event = None
         if events:
             for event in events:
@@ -200,6 +244,24 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
                     break
 
         if latest_call_event:
+            # Extract snapshot/vignette from the first subevent if available
+            snapshot_url = None
+            snapshot_expires_at = None
+            vignette_url = None
+            vignette_expires_at = None
+            subevents = latest_call_event.get("subevents")
+            if subevents and isinstance(subevents, list) and len(subevents) > 0:
+                first_subevent = subevents[0]  # Assuming first subevent is relevant
+                if isinstance(first_subevent, dict):
+                    snapshot_data = first_subevent.get("snapshot")
+                    if isinstance(snapshot_data, dict):
+                        snapshot_url = snapshot_data.get("url")
+                        snapshot_expires_at = snapshot_data.get("expires_at")
+                    vignette_data = first_subevent.get("vignette")
+                    if isinstance(vignette_data, dict):
+                        vignette_url = vignette_data.get("url")
+                        vignette_expires_at = vignette_data.get("expires_at")
+
             attrs.update(
                 {
                     "call_id": latest_call_event.get("id"),
@@ -208,6 +270,10 @@ class BticinoCallBinarySensor(CoordinatorEntity, BinarySensorEntity):
                     "call_duration": latest_call_event.get("duration"),
                     "call_type": latest_call_event.get("call_type"),
                     "call_status": latest_call_event.get("status"),
+                    "snapshot_url": snapshot_url,
+                    "snapshot_expires_at": snapshot_expires_at,
+                    "vignette_url": vignette_url,
+                    "vignette_expires_at": vignette_expires_at,
                 }
             )
 

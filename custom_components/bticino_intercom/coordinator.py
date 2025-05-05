@@ -5,6 +5,7 @@ import logging
 from typing import Any, Callable, Dict, Optional
 from datetime import timedelta, datetime, UTC
 import copy
+import re
 
 from pybticino import AsyncAccount, WebsocketClient, AuthHandler
 from pybticino.exceptions import PyBticinoException, ApiError, AuthError
@@ -32,9 +33,6 @@ from .const import (
     EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
     EVENT_LOGBOOK_TERMINATED,
     DATA_LAST_EVENT,
-    PUSH_TYPE_RTC,
-    BRIDGE_TYPES,
-    MODULE_TYPES,
     UPDATE_INTERVAL,
 )
 
@@ -112,15 +110,31 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             selected_home_obj = self.account.homes[self.home_id]
             homes_data[self.home_id] = selected_home_obj.raw_data
 
-            # Find the main bridge module (BNC1)
+            # Find the main bridge module by checking if the ID is a MAC address
             bridge_module = None
+            mac_address_pattern = re.compile(r"^([0-9A-Fa-f]{2}:){5}([0-9A-Fa-f]{2})$")
+            # LOOP 1: Populate modules_data based on topology AND find the bridge
             for module_obj in selected_home_obj.modules:
                 modules_data[module_obj.id] = module_obj.raw_data
-                if module_obj.raw_data.get("type") in BRIDGE_TYPES:
+                # Check if the module ID matches the MAC address pattern and we haven't found the bridge yet
+                if not bridge_module and mac_address_pattern.match(module_obj.id):
                     bridge_module = module_obj
+                    _LOGGER.debug(f"Found bridge module with MAC ID: {module_obj.id}")
+                    # Do NOT break, continue populating modules_data
 
             if not bridge_module:
-                raise UpdateFailed("No bridge module found in the system")
+                # Log the available module types and IDs for debugging
+                available_modules_info = [
+                    f"ID: {m.id}, Type: {m.raw_data.get('type', 'N/A')}, Variant: {m.raw_data.get('variant', 'N/A')}"
+                    for m in selected_home_obj.modules
+                ]
+                _LOGGER.error(
+                    "No bridge module found (expected ID formatted as MAC address). Available modules: %s",
+                    available_modules_info,
+                )
+                raise UpdateFailed(
+                    "No bridge module found in the system (MAC address ID check failed)"
+                )
 
             # Store the bridge module ID as our main device ID
             self._main_device_id = bridge_module.id
@@ -196,7 +210,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
     def _process_websocket_event(self, message: dict[str, Any]) -> bool:
         """Process event data from websocket and update self.data."""
         updated = False
-        push_type = message.get("push_type")
         extra_params = message.get("extra_params", {})
         session_data = extra_params.get("data", {}).get("session_description", {})
 
@@ -226,11 +239,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         current_module_data = self.data["modules"][module_id]  # Use self.data
         module_updated = False
 
-        # --- Handle RTC Events (Call, Rescind, Terminate) ---
-        if push_type == f"{BRIDGE_TYPES[0]}-{PUSH_TYPE_RTC}":
-            rtc_event_type = session_data.get(
-                "type"
-            )  # e.g., "call", "rescind", "terminate"
+        # --- Handle RTC Events (Call, Rescind, Terminate) based on session_data type ---
+        rtc_event_type = session_data.get("type")
+        if rtc_event_type in ["call", "rescind", "terminate"]:
             calling_module_id = session_data.get(
                 "module_id", module_id
             )  # Module initiating/involved
@@ -290,7 +301,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                         "module_id": calling_module_id,
                     },
                 )
-            # Add elif for other RTC types like 'accept', 'decline' if needed
 
             if new_event_type:
                 _LOGGER.info(log_message)
@@ -316,10 +326,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if not updated and isinstance(extra_params.get("data"), dict):
             possible_state_data = extra_params["data"]
             # Check only if it's NOT an RTC event we already handled
-            if not (
-                push_type == f"{BRIDGE_TYPES[0]}-{PUSH_TYPE_RTC}"
-                and session_data.get("type") in ["call", "rescind", "terminate"]
-            ):
+            if not (rtc_event_type in ["call", "rescind", "terminate"]):
                 for key, value in possible_state_data.items():
                     # Avoid overwriting complex structures or already handled types
                     if (

@@ -27,32 +27,44 @@ EVENT_TYPE_INCOMING_CALL = "incoming_call"
 EVENT_TYPE_ANSWERED_ELSEWHERE = "answered_elsewhere"
 EVENT_TYPE_TERMINATED = "terminated"
 
-# Device Types
-BRIDGE_TYPES = [
-    "BNC1",
-    # Aggiungi qui altri tipi di bridge supportati
-]
+# Module Types (Based on Variant Subtype)
+SUBTYPE_DOORLOCK = "bndl_doorlock"
+SUBTYPE_STAIRCASE_LIGHT = "bnsl_staircase_light"
+SUBTYPE_EXTERNAL_UNIT = "bneu_external_unit"
+# Add other known subtypes here if needed
 
-LOCK_TYPES = [
-    "BNDL",
-]
+# Mapping from subtype to Home Assistant platform/domain
+SUBTYPE_TO_PLATFORM = {
+    SUBTYPE_DOORLOCK: Platform.LOCK,
+    SUBTYPE_STAIRCASE_LIGHT: Platform.LIGHT,
+    SUBTYPE_EXTERNAL_UNIT: Platform.BINARY_SENSOR,  # Assuming external unit acts as a doorbell sensor
+}
 
-LIGHT_TYPES = [
-    "BNSL",
-]
+# Deprecated Type Lists (BRIDGE_TYPES kept for websocket event check)
+# BRIDGE_TYPES = [
+#     "BNC1",
+# ]
 
-DOOR_BELL_TYPES = [
-    "BNEU",
-]
+# LOCK_TYPES = [
+#     "BNDL",
+# ]
+#
+# LIGHT_TYPES = [
+#     "BNSL",
+# ]
+#
+# DOOR_BELL_TYPES = [
+#     "BNEU",
+# ]
 
-# Combine all module types
-MODULE_TYPES = BRIDGE_TYPES + LOCK_TYPES + LIGHT_TYPES + DOOR_BELL_TYPES
+# Combine all module types (consider removing or adjusting if only variant is used)
+# MODULE_TYPES = BRIDGE_TYPES + LOCK_TYPES + LIGHT_TYPES + DOOR_BELL_TYPES
 
 # Push types from websocket
 PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
-PUSH_TYPE_WEBSOCKET_CONNECTION = (
-    f"{BRIDGE_TYPES[0]}-websocket_connection"  # Used for RTC events
-)
+# PUSH_TYPE_WEBSOCKET_CONNECTION = (
+#     f"{BRIDGE_TYPES[0]}-websocket_connection"  # Might need adjustment if bridge ID logic changes how we reference it
+# )
 
 # Dispatcher signal
 SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
