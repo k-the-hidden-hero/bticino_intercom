@@ -304,15 +304,25 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
             if new_event_type:
                 _LOGGER.info(log_message)
+
+                # Extract subevents from the original message if available
+                # session_data was already extracted: extra_params.get("data", {}).get("session_description", {})
+                subevents_data = session_data.get("subevents")
+
                 # Update last event data
                 self.data[DATA_LAST_EVENT] = {
                     "type": new_event_type,
-                    "timestamp": datetime.now(UTC),
+                    "timestamp": datetime.now(UTC), # This is the time HA processed the event
+                    "time": session_data.get("time"), # Add original event time if available
                     "module_id": calling_module_id,
                     "module_name": calling_module_name,
-                    "raw_event": message,
+                    "subevents": subevents_data,  # Include extracted subevents
+                    "raw_event": message, # Keep raw_event for deeper debugging if needed
+                    # Potentially copy other relevant fields from session_data directly
+                    "session_id": session_data.get("session_id"),
+                    "video_status": session_data.get("video_status"), # Example
                 }
-                _LOGGER.debug("Updated last event data: %s", self.data[DATA_LAST_EVENT])
+                _LOGGER.debug("Updated last event data (full structure): %s", self.data[DATA_LAST_EVENT])
                 updated = True
 
         # --- Handle other specific push_types if necessary ---
