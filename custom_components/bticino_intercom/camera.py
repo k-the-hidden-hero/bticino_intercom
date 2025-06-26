@@ -165,12 +165,12 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             last_event = events[0] if events else None
 
         if last_event:
-            event_time_raw = last_event.get("time") or last_event.get("timestamp")
+            event_time_ts = last_event.get("time") or last_event.get("timestamp")
             subevents = last_event.get("subevents")
             if subevents and isinstance(subevents, list) and len(subevents) > 0:
                 first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
-                event_time_raw = (
-                    first_subevent.get("time") or event_time_raw
+                event_time_ts = (
+                    first_subevent.get("time") or event_time_ts
                 )  # Prioritize subevent time
                 image_data = first_subevent.get(self._image_type)
                 if isinstance(image_data, dict):
@@ -184,8 +184,8 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             else None
         )
         self._event_time = (
-            utc_from_timestamp(event_time_raw)
-            if isinstance(event_time_raw, (int, float)) and event_time_raw > 0
+            utc_from_timestamp(event_time_ts)
+            if isinstance(event_time_ts, (int, float)) and event_time_ts > 0
             else None
         )
 
