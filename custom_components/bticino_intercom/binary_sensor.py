@@ -366,7 +366,7 @@ class BticinoCallBinarySensor(
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
-        if self._turn_off_canceller:
+        if hasattr(self, "_turn_off_canceller")  and self._turn_off_canceller:
             _LOGGER.debug(
                 "Cancelling turn-off timer for %s during removal", self.entity_id
             )
