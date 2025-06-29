@@ -501,7 +501,7 @@ class BticinoBridgeUptimeSensor(BticinoBridgeBaseSensor):
     """Representation of the Bridge Uptime."""
 
     _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.DAYS
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:timer-sand"
 
