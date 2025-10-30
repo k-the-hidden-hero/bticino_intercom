@@ -549,10 +549,11 @@ class BticinoBridgeWifiStrengthSensor(BticinoBridgeBaseSensor):
     def _update_state_from_data(self, data: dict[str, Any]) -> None:
         """Update state."""
         wifi_strength = data.get("wifi_strength")
-        # Ensure it's a number before setting state
-        self._attr_native_value = (
-            wifi_strength if isinstance(wifi_strength, (int, float)) else None
-        )
+        if isinstance(wifi_strength, (int, float)):
+            # RSSI should be negative. If it's positive, make it negative.
+            self._attr_native_value = -abs(wifi_strength)
+        else:
+            self._attr_native_value = None
         self._attr_extra_state_attributes = {}  # No extra attributes needed
 
 
