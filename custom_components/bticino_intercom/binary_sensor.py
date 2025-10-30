@@ -51,45 +51,19 @@ async def async_setup_entry(
         "coordinator"
     ]
 
-    entities = []
-    if coordinator.data and "modules" in coordinator.data:
-        _LOGGER.debug(
-            f"Binary Sensor Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
-        )
-        for module_id, module_data in coordinator.data["modules"].items():
-            variant = module_data.get("variant")
-            subtype = None
-            _LOGGER.debug(
-                f"Binary Sensor Setup: Checking module {module_id}, Variant: {variant}"
-            )
-            if variant and ":" in variant:
-                try:
-                    subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug(f"Binary Sensor Setup: Extracted subtype: {subtype}")
-                except IndexError:
-                    _LOGGER.warning(
-                        "Could not parse subtype from variant '%s' for module %s",
-                        variant,
-                        module_id,
-                    )
-                    subtype = None
-
-            if subtype == SUBTYPE_EXTERNAL_UNIT:
-                _LOGGER.debug(
-                    "Found external unit module (via variant subtype): %s", module_id
-                )
-                entities.append(BticinoCallBinarySensor(coordinator, module_id))
-            elif subtype:
-                _LOGGER.debug(
-                    f"Binary Sensor Setup: Module {module_id} subtype '{subtype}' did not match expected external unit subtype."
-                )
-            elif not subtype and variant is not None:
-                _LOGGER.debug(
-                    f"Binary Sensor Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
-                )
+    # Use a list comprehension for a cleaner and more efficient approach
+    entities = [
+        BticinoCallBinarySensor(coordinator, module_id)
+        for module_id, module_data in coordinator.data.get("modules", {}).items()
+        if module_data.get("variant", "").split(":", 1)[-1] == SUBTYPE_EXTERNAL_UNIT
+    ]
 
     if not entities:
-        _LOGGER.debug("No BTicino external unit modules found")
+        _LOGGER.debug("No BTicino external unit modules found to set up.")
+    else:
+        _LOGGER.debug(
+            "Found %d BTicino external unit modules to set up.", len(entities)
+        )
 
     async_add_entities(entities)
 

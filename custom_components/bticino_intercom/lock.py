@@ -37,65 +37,23 @@ async def async_setup_entry(
     coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id][
         "coordinator"
     ]
-    # Get the configuration option
     light_as_lock = entry.options.get("light_as_lock", False)
 
     entities = []
-    if coordinator.data and "modules" in coordinator.data:
-        _LOGGER.debug(
-            f"Lock Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
-        )
-        for module_id, module_data in coordinator.data["modules"].items():
-            variant = module_data.get("variant")
-            subtype = None
-            _LOGGER.debug(
-                f"Lock Setup: Checking module {module_id}, Variant: {variant}"
-            )
-            if variant and ":" in variant:
-                try:
-                    subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug(f"Lock Setup: Extracted subtype: {subtype}")
-                except IndexError:
-                    _LOGGER.warning(
-                        "Could not parse subtype from variant '%s' for module %s",
-                        variant,
-                        module_id,
-                    )
-                    subtype = None  # Ensure subtype is None if split fails
+    for module_id, module_data in coordinator.data.get("modules", {}).items():
+        subtype = module_data.get("variant", "").split(":", 1)[-1]
 
-            # Check if the subtype corresponds to a lock
-            if subtype == SUBTYPE_DOORLOCK:
-                _LOGGER.debug("Found lock module (via variant subtype): %s", module_id)
-                entities.append(BticinoLock(coordinator, module_id))
-
-            # Check if the subtype corresponds to a light and light_as_lock is enabled
-            elif subtype == SUBTYPE_STAIRCASE_LIGHT and light_as_lock:
-                _LOGGER.debug(
-                    "Found light module %s (via variant subtype), representing as lock (light_as_lock=True).",
-                    module_id,
-                )
-                entities.append(BticinoLightAsLock(coordinator, module_id))
-            elif subtype == SUBTYPE_STAIRCASE_LIGHT and not light_as_lock:
-                _LOGGER.debug(
-                    "Found light module %s (via variant subtype), but configured as light. Skipping lock entity creation.",
-                    module_id,
-                )
-            elif subtype:
-                _LOGGER.debug(
-                    f"Lock Setup: Module {module_id} subtype '{subtype}' did not match expected lock/light subtypes."
-                )
-            # Optionally, log modules with unknown/missing variants if needed for debugging
-            elif not subtype and variant is not None:
-                _LOGGER.debug(
-                    f"Lock Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
-                )
-            # else: # subtype is None and variant is None
-            #     _LOGGER.debug(f"Lock Setup: Module {module_id} has no variant field.") # Potentially too verbose
+        if subtype == SUBTYPE_DOORLOCK:
+            entities.append(BticinoLock(coordinator, module_id))
+        elif subtype == SUBTYPE_STAIRCASE_LIGHT and light_as_lock:
+            entities.append(BticinoLightAsLock(coordinator, module_id))
 
     if not entities:
         _LOGGER.debug(
-            "No BTicino lock modules found or configured to be represented as lock"
+            "No BTicino lock modules found or configured to be represented as lock."
         )
+    else:
+        _LOGGER.debug("Found %d BTicino lock modules to set up.", len(entities))
 
     async_add_entities(entities)
 

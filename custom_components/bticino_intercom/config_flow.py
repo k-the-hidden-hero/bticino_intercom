@@ -90,10 +90,12 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
-    # Store data between steps
-    _config_data: dict[str, Any] = {}  # Store config data (user/pass/home_id)
-    _config_title: str = ""  # Store title
-    _homes_data: dict[str, Any] | None = None
+
+    def __init__(self) -> None:
+        """Initialize."""
+        self._config_data: dict[str, Any] = {}
+        self._config_title: str = ""
+        self._homes_data: dict[str, Any] | None = None
 
     # Add static method to get options flow
     @staticmethod
@@ -138,6 +140,11 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Store user input temporarily
                 self._config_data[CONF_USERNAME] = user_input[CONF_USERNAME]
                 self._config_data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
+
+                # De-duplicate modules before counting or storing them
+                for home in account.homes.values():
+                    unique_modules = {module.id: module for module in home.modules}
+                    home.modules = list(unique_modules.values())
 
                 if len(account.homes) == 0:
                     # No homes found for the account
