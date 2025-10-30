@@ -197,6 +197,42 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 self._home_name = final_data["homes"][self.home_id]["name"]
                 _LOGGER.debug("Home name set to: %s", self._home_name)
 
+            # --- Post-processing: Enrich last_event from websocket with full data from API ---
+            last_event_from_ws = self.data.get(DATA_LAST_EVENT, {})
+            last_event_session_id = last_event_from_ws.get("session_id")
+            # Check if the last_event was from a websocket and doesn't have subevents yet
+            if (
+                last_event_session_id
+                and not last_event_from_ws.get("subevents")
+                and events_history_data.get(self.home_id)
+            ):
+                _LOGGER.debug(
+                    "Last event from websocket is missing details. Searching history for session_id: %s",
+                    last_event_session_id,
+                )
+                # Find the corresponding event in the history
+                for api_event in events_history_data[self.home_id]:
+                    api_subevents = api_event.get("subevents", [])
+                    if (
+                        api_subevents
+                        and isinstance(api_subevents, list)
+                        and api_subevents[0].get("session_id") == last_event_session_id
+                    ):
+                        _LOGGER.info(
+                            "Found matching event in API history for session %s. Enriching last_event.",
+                            last_event_session_id,
+                        )
+                        # Merge the detailed subevents into the existing last_event data
+                        final_data[DATA_LAST_EVENT][
+                            "subevents"
+                        ] = api_subevents
+                        final_data[DATA_LAST_EVENT]["video_status"] = api_event.get(
+                            "video_status"
+                        )
+                        # Update the timestamp to the more accurate one from the API event
+                        final_data[DATA_LAST_EVENT]["time"] = api_event.get("time")
+                        break  # Stop searching once found
+
             return final_data
 
         except AuthError as err:
@@ -319,8 +355,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     "subevents": subevents_data,  # Include extracted subevents
                     "raw_event": message, # Keep raw_event for deeper debugging if needed
                     # Potentially copy other relevant fields from session_data directly
-                    "session_id": session_data.get("session_id"),
-                    "video_status": session_data.get("video_status"), # Example
+                    "session_id": extra_params.get("session_id")
+                    or message.get("session_id"),
+                    "video_status": session_data.get("video_status"),  # Example
                 }
                 _LOGGER.debug("Updated last event data (full structure): %s", self.data[DATA_LAST_EVENT])
                 updated = True
