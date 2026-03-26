@@ -19,6 +19,7 @@ from homeassistant.const import (
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
     EVENT_HOMEASSISTANT_START,
+    EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
 from homeassistant.core import (
@@ -287,6 +288,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Store the removal function for the start listener
     hass.data[DOMAIN][entry.entry_id][START_LISTENER_REMOVE_KEY] = start_listener_remove
+
+    # Cancel WebSocket task on HA stop to prevent blocking shutdown
+    async def _async_stop_websocket_manager(event: HAEvent) -> None:
+        """Cancel the WebSocket manager task when HA is stopping."""
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if entry_data:
+            websocket_task = entry_data.get(WEBSOCKET_TASK_KEY)
+            if websocket_task and not websocket_task.done():
+                _LOGGER.debug("Cancelling WebSocket manager task on HA stop.")
+                websocket_task.cancel()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_stop_websocket_manager)
+    )
 
     return True
 
