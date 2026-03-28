@@ -19,6 +19,7 @@ from homeassistant.const import (
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
     EVENT_HOMEASSISTANT_START,
+    EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
 from homeassistant.core import (
@@ -38,7 +39,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-RECONNECT_DELAY = 30  # Seconds to wait before attempting reconnect
+RECONNECT_DELAY = 30  # Default delay, overridden by smart backoff
+BOOT_RETRY_DELAYS = [5, 10, 30, 30, 30, 60]  # Backoff al boot
+RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
@@ -128,6 +131,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info(
             "Starting WebSocket connection manager task function (triggered by HA start)"
         )
+        is_boot = True  # First connection attempt after startup
+        attempt = 0  # Retry counter, resets on successful connection
         # Outer try block to catch unexpected errors in the loop structure itself
         try:
             while (
@@ -149,6 +154,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     _LOGGER.info(
                         "WebSocket connect call completed without raising immediate exception."
                     )
+                    # Connection succeeded: reset retry state
+                    attempt = 0
+                    is_boot = False
 
                     # Get the listener task from the client
                     listener_task = websocket_client.get_listener_task()
@@ -207,19 +215,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     await websocket_client.disconnect()  # disconnect handles its own listener task cancellation too
                     _LOGGER.debug("WebSocket client disconnected in finally block.")
 
-                # --- Reconnect Delay Logic ---
-                # This part is outside the inner try...finally, but inside the while loop
+                # --- Smart Reconnect Delay Logic ---
                 _LOGGER.debug("WebSocket manager: Reached reconnect delay logic.")
                 if (
                     hass.is_running
                     and entry.state == config_entries.ConfigEntryState.LOADED
                 ):
-                    _LOGGER.debug(
-                        "Waiting %d seconds before WebSocket reconnect attempt...",
-                        RECONNECT_DELAY,
+                    # Pick delay from appropriate backoff schedule
+                    delays = BOOT_RETRY_DELAYS if is_boot else RUNTIME_RETRY_DELAYS
+                    delay = delays[min(attempt, len(delays) - 1)]
+                    attempt += 1
+                    _LOGGER.info(
+                        "WebSocket reconnect attempt %d (%s), waiting %ds...",
+                        attempt,
+                        "boot" if is_boot else "runtime",
+                        delay,
                     )
                     try:
-                        await asyncio.sleep(RECONNECT_DELAY)
+                        await asyncio.sleep(delay)
                     except asyncio.CancelledError:
                         _LOGGER.info(
                             "Reconnect delay interrupted by cancellation. Exiting manager loop."
@@ -287,6 +300,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Store the removal function for the start listener
     hass.data[DOMAIN][entry.entry_id][START_LISTENER_REMOVE_KEY] = start_listener_remove
+
+    # Cancel WebSocket task on HA shutdown to prevent blocking
+    async def _async_cancel_websocket_on_stop(event: HAEvent) -> None:
+        """Cancel the WebSocket manager task when HA is stopping."""
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        ws_task = entry_data.get(WEBSOCKET_TASK_KEY)
+        if ws_task and not ws_task.done():
+            _LOGGER.debug("Cancelling WebSocket manager task on HA stop.")
+            ws_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await ws_task
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_cancel_websocket_on_stop)
+    )
 
     return True
 

@@ -211,6 +211,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
                 module_id=self._module_id,
                 bridge_id=self._bridge_id,
                 state={"lock": False},
+                timezone=self.hass.config.time_zone,
             )
             # No need to refresh immediately, coordinator will handle it
         except Exception as err:
@@ -246,6 +247,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
                 module_id=self._module_id,
                 bridge_id=self._bridge_id,
                 state={"lock": True},
+                timezone=self.hass.config.time_zone,
             )
             # No need to refresh immediately
         except Exception as err:
@@ -397,6 +399,7 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
                 module_id=self._module_id,
                 bridge_id=self._bridge_id,
                 state={"on": True},
+                timezone=self.hass.config.time_zone,
             )
 
             # Set auto-relock timer
@@ -436,6 +439,7 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
                 module_id=self._module_id,
                 bridge_id=self._bridge_id,
                 state={"on": False},
+                timezone=self.hass.config.time_zone,
             )
         except Exception as err:
             _LOGGER.error("Failed to lock %s: %s", self.entity_id, err)
