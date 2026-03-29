@@ -7,10 +7,8 @@ from typing import Any
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
@@ -19,6 +17,7 @@ from .const import (
     SUBTYPE_STAIRCASE_LIGHT,
 )
 from .coordinator import BticinoIntercomCoordinator
+from .entity import BticinoEntity
 from .utils import format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,7 +30,6 @@ async def async_setup_entry(
 ) -> None:
     """Set up BTicino locks based on config entry."""
     coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    # Get the configuration option
     light_as_lock = entry.options.get("light_as_lock", False)
 
     entities = []
@@ -51,14 +49,11 @@ async def async_setup_entry(
                         variant,
                         module_id,
                     )
-                    subtype = None  # Ensure subtype is None if split fails
+                    subtype = None
 
-            # Check if the subtype corresponds to a lock
             if subtype == SUBTYPE_DOORLOCK:
                 _LOGGER.debug("Found lock module (via variant subtype): %s", module_id)
                 entities.append(BticinoLock(coordinator, module_id))
-
-            # Check if the subtype corresponds to a light and light_as_lock is enabled
             elif subtype == SUBTYPE_STAIRCASE_LIGHT and light_as_lock:
                 _LOGGER.debug(
                     "Found light module %s (via variant subtype), representing as lock (light_as_lock=True).",
@@ -76,13 +71,10 @@ async def async_setup_entry(
                     module_id,
                     subtype,
                 )
-            # Optionally, log modules with unknown/missing variants if needed for debugging
             elif not subtype and variant is not None:
                 _LOGGER.debug(
                     "Lock Setup: Module %s has variant '%s' but failed to extract subtype.", module_id, variant
                 )
-            # else: # subtype is None and variant is None
-            #     _LOGGER.debug(f"Lock Setup: Module {module_id} has no variant field.") # Potentially too verbose
 
     if not entities:
         _LOGGER.debug("No BTicino lock modules found or configured to be represented as lock")
@@ -90,57 +82,33 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BticinoLock(CoordinatorEntity, LockEntity):
+class BticinoLock(BticinoEntity, LockEntity):
     """Representation of a BTicino lock."""
 
     _attr_supported_features = LockEntityFeature.OPEN
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the lock."""
-        super().__init__(coordinator)
-        self._module_id = module_id
+        super().__init__(coordinator, module_id)
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
         self._attr_name = module_data.get("name", "Lock")
         self._attr_unique_id = f"{coordinator.entry.entry_id}_lock_{module_id}"
-        # Lock state is based on coordinator data, but we need _attr_is_locked for optimistic
         self._attr_is_locked = bool(module_data.get("lock", True))
-        self._bridge_id = module_data.get("bridge")
         self._relock_canceller: Callable[[], None] | None = None
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        # Use coordinator.home_name for the device name if available
-        device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
-        )
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator._main_device_id)},
-            name=device_name,
-            manufacturer="BTicino",
-        )
 
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        # Check coordinator update success first
         if not self.coordinator.last_update_success:
             return False
-        # Check specific module reachability
         module_data = self.coordinator.data.get("modules", {}).get(self._module_id)
         if not module_data:
-            return False  # Module disappeared?
-        return module_data.get("reachable", True)  # Assume reachable if key missing
+            return False
+        return module_data.get("reachable", True)
 
     @property
     def is_locked(self) -> bool:
         """Return true if lock is locked."""
-        # Return optimistic state if timer is active
-        if self._relock_canceller is not None:
-            return self._attr_is_locked
-        # Otherwise, return state from coordinator
-        # Use internal _attr_is_locked which is updated by coordinator_update
         return self._attr_is_locked
 
     @property
@@ -174,7 +142,6 @@ class BticinoLock(CoordinatorEntity, LockEntity):
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock with optimistic state and timer."""
-        # Cancel any previous relock timer
         if self._relock_canceller:
             self._relock_canceller()
             self._relock_canceller = None
@@ -183,14 +150,11 @@ class BticinoLock(CoordinatorEntity, LockEntity):
             _LOGGER.error("Bridge ID not found for lock %s", self._module_id)
             return
 
-        # Optimistic update
         self._attr_is_locked = False
-        self.async_write_ha_state()  # Logbook entry!
+        self.async_write_ha_state()
 
-        # Set timer to automatically relock state
         self._relock_canceller = async_call_later(self.hass, LOCK_RELOCK_DELAY, self._relock_callback)
 
-        # Send command to API
         try:
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
@@ -199,21 +163,16 @@ class BticinoLock(CoordinatorEntity, LockEntity):
                 state={"lock": False},
                 timezone=self.hass.config.time_zone,
             )
-            # No need to refresh immediately, coordinator will handle it
         except Exception as err:
             _LOGGER.error("Failed to unlock %s: %s", self._module_id, err)
-            # Revert optimistic state on error
             if self._relock_canceller:
                 self._relock_canceller()
                 self._relock_canceller = None
-            self._attr_is_locked = True  # Revert to locked
+            self._attr_is_locked = True
             self.async_write_ha_state()
-            # Optionally trigger a refresh on error to get actual state sooner
-            # await self.coordinator.async_request_refresh()
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock with optimistic state."""
-        # Cancel relock timer if it's running
         if self._relock_canceller:
             self._relock_canceller()
             self._relock_canceller = None
@@ -222,11 +181,9 @@ class BticinoLock(CoordinatorEntity, LockEntity):
             _LOGGER.error("Bridge ID not found for lock %s", self._module_id)
             return
 
-        # Optimistic update
         self._attr_is_locked = True
-        self.async_write_ha_state()  # Logbook entry!
+        self.async_write_ha_state()
 
-        # Send command to API
         try:
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
@@ -235,24 +192,17 @@ class BticinoLock(CoordinatorEntity, LockEntity):
                 state={"lock": True},
                 timezone=self.hass.config.time_zone,
             )
-            # No need to refresh immediately
         except Exception as err:
             _LOGGER.error("Failed to lock %s: %s", self._module_id, err)
-            # Revert optimistic state on error
             self._attr_is_locked = False
             self.async_write_ha_state()
-            # Optionally trigger refresh
-            # await self.coordinator.async_request_refresh()
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Update internal state only if not optimistically unlocked
         if self._relock_canceller is None:
             module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
             self._attr_is_locked = bool(module_data.get("lock", True))
-
-        # Let HA know state + attributes might have changed
         self.async_write_ha_state()
 
     @callback
@@ -261,9 +211,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
         _LOGGER.debug("Optimistic relock timer expired for %s", self.entity_id)
         self._relock_canceller = None
         self._attr_is_locked = True
-        self.async_write_ha_state()  # Logbook entry for relock
-        # Optionally request refresh to confirm
-        # self.hass.async_create_task(self.coordinator.async_request_refresh())
+        self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up timer when entity is removed."""
@@ -273,38 +221,20 @@ class BticinoLock(CoordinatorEntity, LockEntity):
         await super().async_will_remove_from_hass()
 
 
-class BticinoLightAsLock(CoordinatorEntity, LockEntity):
+class BticinoLightAsLock(BticinoEntity, LockEntity):
     """Representation of a BTicino light used as a lock."""
 
     _attr_supported_features = LockEntityFeature.OPEN
-    _attr_has_entity_name = True
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the light as lock."""
-        super().__init__(coordinator)
-        self._module_id = module_id
+        super().__init__(coordinator, module_id)
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
-        # Use the light's name but append ' Lock'
         base_name = module_data.get("name", "Door")
         self._attr_name = f"{base_name} Lock"
         self._attr_unique_id = f"{coordinator.entry.entry_id}_light_as_lock_{module_id}"
-        # Lock state is inverse of light state (light on = unlocked, light off = locked)
         self._attr_is_locked = not bool(module_data.get("status") == "on")
-        self._bridge_id = module_data.get("bridge")
-        self._relock_canceller: Callable[[], None] | None = None  # Ensure Callable is imported if not already
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        # Associate with the same device as the coordinator
-        device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
-        )
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator._main_device_id)},
-            name=device_name,
-            manufacturer="BTicino",
-        )
+        self._relock_canceller: Callable[[], None] | None = None
 
     @property
     def available(self) -> bool:
@@ -319,16 +249,11 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
     @property
     def is_locked(self) -> bool:
         """Return true if lock is locked."""
-        # Return optimistic state if timer is active
-        if self._relock_canceller is not None:
-            return self._attr_is_locked
-        # Otherwise, return state from coordinator
         return self._attr_is_locked
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return device specific state attributes."""
-        # Reuse attributes from BticinoLight for consistency
         if not self.coordinator.data or "modules" not in self.coordinator.data:
             return None
         module_data = self.coordinator.data["modules"].get(self._module_id)
@@ -352,7 +277,7 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             "appliance_type": module_data.get("appliance_type"),
             "local_ipv4": module_data.get("local_ipv4"),
             "wifi_strength": module_data.get("wifi_strength"),
-            "represented_as": "lock",  # Indicate this light is acting as a lock
+            "represented_as": "lock",
         }
         return {k: v for k, v in attrs.items() if v is not None}
 
@@ -363,17 +288,14 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             _LOGGER.error("Bridge ID not found for lock %s", self._module_id)
             return
 
-        # Cancel any existing relock timer
         if self._relock_canceller:
             self._relock_canceller()
             self._relock_canceller = None
 
-        # Optimistic update
         self._attr_is_locked = False
         self.async_write_ha_state()
 
         try:
-            # Turn on the light to unlock
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
                 module_id=self._module_id,
@@ -381,13 +303,9 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
                 state={"on": True},
                 timezone=self.hass.config.time_zone,
             )
-
-            # Set auto-relock timer
             self._relock_canceller = async_call_later(self.hass, LOCK_RELOCK_DELAY, self._relock_callback)
-
         except Exception as err:
             _LOGGER.error("Failed to unlock %s: %s", self.entity_id, err)
-            # Revert optimistic state on error
             if self._relock_canceller:
                 self._relock_canceller()
                 self._relock_canceller = None
@@ -401,17 +319,14 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             _LOGGER.error("Bridge ID not found for lock %s", self._module_id)
             return
 
-        # Cancel any relock timer (might be called manually)
         if self._relock_canceller:
             self._relock_canceller()
             self._relock_canceller = None
 
-        # Optimistic update
         self._attr_is_locked = True
         self.async_write_ha_state()
 
         try:
-            # Turn off the light to lock
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
                 module_id=self._module_id,
@@ -421,17 +336,14 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             )
         except Exception as err:
             _LOGGER.error("Failed to lock %s: %s", self.entity_id, err)
-            # Revert optimistic state on error
             self._attr_is_locked = False
             self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Update internal state only if not optimistically unlocked
         if self._relock_canceller is None:
             module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
-            # Light on = unlocked, Light off = locked
             new_state_locked = not bool(module_data.get("status") == "on")
             if self._attr_is_locked != new_state_locked:
                 _LOGGER.debug(
@@ -440,7 +352,6 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
                     "locked" if new_state_locked else "unlocked",
                 )
                 self._attr_is_locked = new_state_locked
-        # Let HA know state + attributes might have changed
         self.async_write_ha_state()
 
     @callback
@@ -450,8 +361,6 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
         self._relock_canceller = None
         self._attr_is_locked = True
         self.async_write_ha_state()
-        # Optionally request refresh to confirm
-        # self.hass.async_create_task(self.coordinator.async_request_refresh())
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up timer when entity is removed."""

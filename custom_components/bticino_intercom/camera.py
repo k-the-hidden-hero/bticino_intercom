@@ -33,7 +33,7 @@ async def async_setup_entry(
     coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     # Only add cameras if the bridge is identified
-    if not coordinator._main_device_id:
+    if not coordinator.main_device_id:
         _LOGGER.warning("No bridge device ID found, cannot set up cameras.")
         return
 
@@ -73,17 +73,17 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info linking to the main bridge device."""
-        # Assert that bridge_id exists because we check in setup_entry
-        assert self.coordinator._main_device_id is not None
+        if not self.coordinator.main_device_id:
+            return DeviceInfo(identifiers={(DOMAIN, self.coordinator.entry.entry_id)})
         device_name = (
             f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
         )
         # Extract bridge module data to potentially get model info
-        bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator._main_device_id)
+        bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id)
         model = bridge_module_data.get("type") if bridge_module_data else None
 
         return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator._main_device_id)},
+            identifiers={(DOMAIN, self.coordinator.main_device_id)},
             name=device_name,  # Use dynamic name
             manufacturer="BTicino",
             model=model,  # Add model if available

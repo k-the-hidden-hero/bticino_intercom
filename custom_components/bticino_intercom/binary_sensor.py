@@ -3,7 +3,6 @@
 import logging
 from typing import Any
 
-# Unused imports removed
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -11,12 +10,8 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
-
-# Import CoordinatorEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CALL_SENSOR_TIMEOUT,
@@ -24,15 +19,12 @@ from .const import (
     SIGNAL_CALL_RECEIVED,
     SUBTYPE_DOORLOCK,
     SUBTYPE_EXTERNAL_UNIT,
-)  # Remove unused consts
-
-# Import the actual coordinator and signal
+)
 from .coordinator import BticinoIntercomCoordinator
+from .entity import BticinoEntity
 from .utils import format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
-
-# How long the sensor stays 'on' after a call is detected (in seconds)
 
 
 async def async_setup_entry(
@@ -84,26 +76,21 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], BinarySensorEntity):
+class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
     """Representation of a BTicino call sensor."""
 
-    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY  # Or SOUND?
+    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
     _attr_icon = "mdi:doorbell-video"
-    _attr_has_entity_name = True  # Added
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the call sensor."""
-        super().__init__(coordinator)
-        self._module_id = module_id
+        super().__init__(coordinator, module_id)
         self._attr_unique_id = f"{module_id}_call"
-        # Determine entity name with priority: Module Name > Single Lock Name > "Call"
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
         entity_name = module_data.get("name")
 
-        # Initialize bridge_id and associated_lock_ids early
-        self._bridge_id = module_data.get("bridge")
         self._associated_lock_ids: list[str] = []
-        found_locks_data: list[dict[str, Any]] = []  # Store lock data for name check
+        found_locks_data: list[dict[str, Any]] = []
 
         if self._bridge_id:
             for other_module_id, other_module_data in coordinator.data.get("modules", {}).items():
@@ -117,55 +104,35 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
 
                 if other_module_data.get("bridge") == self._bridge_id and other_subtype == SUBTYPE_DOORLOCK:
                     self._associated_lock_ids.append(other_module_id)
-                    found_locks_data.append(other_module_data)  # Store lock data
+                    found_locks_data.append(other_module_data)
 
-        # If module name is missing or seems generic (like the ID), try lock name
         if (not entity_name or entity_name == module_id) and len(found_locks_data) == 1:
             lock_name = found_locks_data[0].get("name")
             if lock_name and lock_name != found_locks_data[0].get("id"):
                 entity_name = lock_name
 
-        # If still no valid name, default to "Call"
         if not entity_name or entity_name == module_id:
             entity_name = "Call"
 
         self._attr_name = entity_name
-
-        # Initial state based on coordinator data
         self._update_state()
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
-        )
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator._main_device_id)},
-            name=device_name,
-            manufacturer="BTicino",
-        )
 
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        # Check coordinator update success first
         if not self.coordinator.last_update_success:
             return False
-        # Return internal state updated by _handle_coordinator_update
         return self._attr_available
 
     @property
     def is_on(self) -> bool:
         """Return true if the binary sensor is on."""
         if hasattr(self, "_attr_is_on") and self._attr_is_on is not None:
-            return self._attr_is_on  # Return optimistically set state if available
+            return self._attr_is_on
 
-        # Fallback to coordinator data if no optimistic state
         if not self.coordinator.data:
             return False
 
-        # Access events history correctly
         events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
         if not events:
             return False
@@ -180,8 +147,6 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes."""
-        # Ensure attributes are updated before returning
-        # Note: This relies on the coordinator update running first
         return self._attr_extra_state_attributes
 
     def _update_state(self) -> None:
@@ -190,11 +155,9 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
             self._attr_available = False
             return
 
-        # Update availability based on the associated module's reachability
         module_data = self.coordinator.data.get("modules", {}).get(self._module_id)
         if not module_data:
             self._attr_available = False
-            # Clear attributes if module data is missing
             self._attr_extra_state_attributes = {}
             return
         else:
@@ -203,7 +166,6 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
         uptime_sec = module_data.get("uptime")
         last_interaction_ts = module_data.get("last_user_interaction")
 
-        # Start with generic module attributes
         attrs = {
             "module_id": self._module_id,
             "bridge_id": self._bridge_id,
@@ -220,8 +182,6 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
             "associated_locks": self._associated_lock_ids,
         }
 
-        # Find the latest call event specific to this module and add its details
-        # Access events history correctly
         events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
         latest_call_event = None
         if events:
@@ -231,14 +191,13 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
                     break
 
         if latest_call_event:
-            # Extract snapshot/vignette from the first subevent if available
             snapshot_url = None
             snapshot_expires_at = None
             vignette_url = None
             vignette_expires_at = None
             subevents = latest_call_event.get("subevents")
             if subevents and isinstance(subevents, list) and len(subevents) > 0:
-                first_subevent = subevents[0]  # Assuming first subevent is relevant
+                first_subevent = subevents[0]
                 if isinstance(first_subevent, dict):
                     snapshot_data = first_subevent.get("snapshot")
                     if isinstance(snapshot_data, dict):
@@ -271,10 +230,7 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
                 }
             )
 
-        # Filter out None values and update the attribute
         self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
-
-        # State (is_on) is handled by dispatcher/timer, not directly by coordinator update
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -316,7 +272,6 @@ class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], Bin
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
         await super().async_added_to_hass()
-
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CALL_RECEIVED, self._handle_call_received))
 
     async def async_will_remove_from_hass(self) -> None:

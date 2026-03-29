@@ -15,6 +15,7 @@ from pybticino.exceptions import ApiError, AuthError
 
 from .const import (
     DATA_LAST_EVENT,
+    DEFAULT_NAME,
     DOMAIN,
     EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
     EVENT_LOGBOOK_INCOMING_CALL,
@@ -61,6 +62,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._home_name = None
         self._normalized_home_name = None
         self._main_device_id = None
+
+    @property
+    def main_device_id(self) -> str | None:
+        """Return the main bridge device ID."""
+        return self._main_device_id
 
     @property
     def home_name(self) -> str:
@@ -145,7 +151,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 config_entry_id=self.entry.entry_id,
                 identifiers={(DOMAIN, self._main_device_id)},
                 manufacturer="BTicino",
-                model="Classe 100X16E",
+                model=bridge_module.raw_data.get("type", DEFAULT_NAME),
                 name=f"BTicino Intercom - {self.home_name}",
                 sw_version=str(
                     bridge_module.raw_data.get("firmware_name")

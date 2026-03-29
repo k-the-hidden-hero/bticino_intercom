@@ -12,11 +12,6 @@ PLATFORMS: list[Platform] = [
     Platform.CAMERA,
 ]
 
-# Configuration constants
-CONF_USERNAME = "username"
-CONF_PASSWORD = "password"
-CONF_CLIENT_ID = "client_id"
-CONF_CLIENT_SECRET = "client_secret"
 
 # Default values
 DEFAULT_NAME = "BTicino Classe 100X/300X"

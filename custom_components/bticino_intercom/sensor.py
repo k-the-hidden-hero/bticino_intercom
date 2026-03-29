@@ -38,11 +38,11 @@ async def async_setup_entry(
 
     # Allow event sensors even if bridge ID is missing initially?
     # Let's require bridge ID for consistency now.
-    if not coordinator.data or not coordinator._main_device_id:
+    if not coordinator.data or not coordinator.main_device_id:
         _LOGGER.warning("Coordinator data or bridge ID not available for sensor setup.")
         return  # Don't set up any sensors if bridge isn't there
 
-    bridge_id = coordinator._main_device_id
+    bridge_id = coordinator.main_device_id
     bridge_module_data = coordinator.data.get("modules", {}).get(bridge_id)
 
     entities = []
@@ -91,17 +91,17 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
     @property
     def device_info(self) -> DeviceInfo | None:
         """Return device info linking to the main bridge device."""
-        if self.coordinator._main_device_id:
+        if self.coordinator.main_device_id:
             # Reuse the logic from BridgeBaseSensor to ensure consistency
             device_name = (
                 f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
             )
-            bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator._main_device_id)
+            bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id)
             model = bridge_module_data.get("type") if bridge_module_data else None
             sw_version = bridge_module_data.get("firmware_name") if bridge_module_data else None
 
             return DeviceInfo(
-                identifiers={(DOMAIN, self.coordinator._main_device_id)},
+                identifiers={(DOMAIN, self.coordinator.main_device_id)},
                 name=device_name,
                 manufacturer="BTicino",
                 model=model,
@@ -217,17 +217,17 @@ class BticinoLastCallTimestampSensor(CoordinatorEntity[BticinoIntercomCoordinato
     @property
     def device_info(self) -> DeviceInfo | None:
         """Return device info linking to the main bridge device."""
-        if self.coordinator._main_device_id:
+        if self.coordinator.main_device_id:
             # Reuse the logic from BridgeBaseSensor to ensure consistency
             device_name = (
                 f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
             )
-            bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator._main_device_id)
+            bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id)
             model = bridge_module_data.get("type") if bridge_module_data else None
             sw_version = bridge_module_data.get("firmware_name") if bridge_module_data else None
 
             return DeviceInfo(
-                identifiers={(DOMAIN, self.coordinator._main_device_id)},
+                identifiers={(DOMAIN, self.coordinator.main_device_id)},
                 name=device_name,
                 manufacturer="BTicino",
                 model=model,
