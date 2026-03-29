@@ -1,124 +1,202 @@
-# BTicino Classe 100X/300X Intercom Integration for Home Assistant 🚪🔊📞
+# BTicino Classe 100X/300X Integration for Home Assistant
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
-[![GitHub issues](https://img.shields.io/github/issues/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/issues)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/releases/latest)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/v/release/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/releases/latest)
+[![CI](https://github.com/k-the-hidden-hero/bticino_intercom/actions/workflows/ci.yaml/badge.svg)](https://github.com/k-the-hidden-hero/bticino_intercom/actions/workflows/ci.yaml)
+[![GitHub Issues](https://img.shields.io/github/issues/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/issues)
+[![License](https://img.shields.io/github/license/k-the-hidden-hero/bticino_intercom)](LICENSE)
 
-Integrate your BTicino Classe 100X or 300X video intercom system with Home Assistant! 🏠 This custom component allows you to monitor calls, open doors, and view the status of your intercom devices directly within Home Assistant.
+A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems. Monitor calls, control door locks, manage staircase lights, and view event snapshots — all from your Home Assistant dashboard.
 
-This integration relies on the BTicino/Netatmo cloud API and utilizes a persistent WebSocket connection for real-time updates, particularly for call events. ☁️🔄
+Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Uses a persistent WebSocket connection for real-time call notifications and periodic polling for state synchronization.
 
 > [!IMPORTANT]
-> This component works only with **netatmo cloud connected devices**.
+> This integration works **only with Netatmo cloud-connected devices** (the ones managed via the **Home + Security** app).
 >
-> If your device works with bticino ~~shitty~~ poor written cloud you
-> can just hope for a firmware upgrade.
+> - Android: [Home + Security on Google Play](https://play.google.com/store/apps/details?id=com.netatmo.camera)
+> - iOS: [Home + Security on App Store](https://apps.apple.com/us/app/home-security/id951725393)
 >
-> At the date of writing this (April 2025) they sent out a mail that they will migrate users to a new cloud (probably the NetAtmo one)
->
-> If you are in doubt on which firmware you are using look at the app on your phone.
-> The right one is called **Home+Security**:
-> - [Android](https://play.google.com/store/apps/details?id=com.netatmo.camera)
-> - [iOS](https://apps.apple.com/us/app/home-security/id951725393)
->
-> If you are using one called **BTicino Door Entry** app I'm sorry.
+> If your device uses the old "BTicino Door Entry" app, it is not compatible. BTicino has announced migration to the Netatmo platform — check with BTicino support for your device's status.
 
+---
 
-## ✨ Features
+## Features
 
-*   **Lock Control:** (`lock` entity) Open external and internal door locks connected to your BTicino system (BNDL modules). Uses optimistic state updates. 🔓
-*   **Incoming Call Sensor:** (`binary_sensor` entity) Get notified when someone rings your external unit (BNEU modules). The sensor stays 'on' for a configurable duration (default 30 seconds). 🔔
-*   **Last Event Sensor:** (`sensor` entity) See the last relevant call event (Incoming Call, Answered Elsewhere, Terminated) along with its timestamp. Linked to the main bridge module (e.g., BNC1). 📜
+### Entities
 
-## 📋 Prerequisites
+| Entity type | What it does |
+|---|---|
+| **Lock** | Control door locks (BNDL modules). Open/close with optimistic state and automatic relock timer. |
+| **Binary Sensor** | Real-time incoming call detection (BNEU external units). Auto-off after 30 seconds. |
+| **Sensor — Last Event** | Shows the last call event type (incoming, answered elsewhere, terminated) with timestamp and snapshot URLs. |
+| **Sensor — Last Call Timestamp** | Timestamp sensor for the most recent completed call. |
+| **Sensor — Bridge Diagnostics** | Uptime, WiFi strength, WebSocket status, local IP, last seen, last config update. |
+| **Light** | Staircase lights (BNSL modules). On/off control. |
+| **Camera** | Last event snapshot and vignette images, fetched from the Netatmo cloud. |
 
-*   A compatible BTicino Classe 100X or 300X video intercom system configured and connected to the BTicino/Netatmo cloud.
-*   Your BTicino/Netatmo account credentials (username/email and password).
-*   Home Assistant instance (obviously! 😉).
+### Real-time events
 
-## 🛠️ Installation
+The integration fires logbook events for automations:
 
-### Recommended: HACS (Home Assistant Community Store)
+- `bticino_intercom_incoming_call` — someone rang the doorbell
+- `bticino_intercom_answered_elsewhere` — call answered on another device
+- `bticino_intercom_terminated` — call ended
 
-1.  Ensure you have [HACS](https://hacs.xyz/) installed.
-2.  Go to HACS -> Integrations -> Click the three dots menu -> Custom Repositories.
-3.  Enter `https://github.com/k-the-hidden-hero/bticino_intercom` as the repository URL.
-4.  Select `Integration` as the category.
-5.  Click "Add".
-6.  The "BTicino Intercom" integration should now appear. Click "Install".
-7.  Restart Home Assistant. 🔄
+### Light as Lock mode
 
-### Manual Installation
+Some BTicino installations use the lighting relay instead of a dedicated lock module. Enable **"Use lighting relay as lock"** in the integration options to expose the light module as a lock entity.
 
-1.  Download the latest release from the [Releases page](https://github.com/k-the-hidden-hero/bticino_intercom/releases).
-2.  Copy the `custom_components/bticino_intercom` folder into your Home Assistant `<config>/custom_components/` directory.
-3.  Restart Home Assistant. 🔄
+---
 
-## ⚙️ Configuration
+## Installation
 
-Configuration is done entirely through the Home Assistant user interface:
+### HACS (recommended)
 
-1.  Go to **Settings** -> **Devices & Services**.
-2.  Click **+ Add Integration**.
-3.  Search for "BTicino Intercom" and select it.
-4.  Enter your BTicino/Netatmo **Username (Email)** and **Password**.
-5.  Click **Submit**.
-6.  If multiple "Homes" are found associated with your account, you will be prompted to select the correct one. 🏡
-7.  The integration will set up entities for your compatible locks and external units. 🎉
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-the-hidden-hero&repository=bticino_intercom&category=integration)
 
-### Light as Lock Option
+Click the button above, or manually:
 
-Some BTicino installations use the lighting relay to control the door lock instead of a dedicated lock module. If this is your case:
+1. Open **HACS** in Home Assistant
+2. Go to **Integrations** and click the **three-dot menu** (top right)
+3. Select **Custom repositories**
+4. Enter `https://github.com/k-the-hidden-hero/bticino_intercom` as the URL
+5. Select **Integration** as the category and click **Add**
+6. Find **BTicino Intercom** in the list and click **Install**
+7. **Restart Home Assistant**
 
-1. Go to the integration settings
-2. Click on "Configure"
-3. Enable the "Use lighting relay as lock" option
+### Manual
 
-This will make the integration use the lighting relay to control the door lock instead of looking for a dedicated lock module.
+1. Download the [latest release](https://github.com/k-the-hidden-hero/bticino_intercom/releases/latest) zip file
+2. Extract the `custom_components/bticino_intercom` folder into your Home Assistant `config/custom_components/` directory
+3. Restart Home Assistant
 
-## 🧩 Supported Entities
+---
 
-The integration currently creates the following entities based on the modules discovered in your selected BTicino Home:
+## Setup
 
-*   **Lock (`lock.external_door`, `lock.internal_door`, etc.):**
-    *   Represents a door lock module (type BNDL).
-    *   Allows you to `Open` (unlock) the door latch. The state will show as 'Unlocking' briefly due to optimistic updates before reverting to 'Locked' after a short delay (API confirmation follows).
-    *   Provides attributes like module ID, firmware version, reachability, etc.
-*   **Binary Sensor (`binary_sensor.external_unit_xyz_call`):**
-    *   Represents the call status of an external unit module (type BNEU).
-    *   State is `on` when a call is actively ringing, `off` otherwise.
-    *   The sensor automatically turns `off` after 30 seconds if no termination event is received.
-    *   Provides attributes like module ID, firmware version, reachability, etc.
-*   **Sensor (`sensor.bridge_xyz_last_event`):**
-    *   Represents the last significant call-related event detected via WebSocket or polling.
-    *   The state shows the event type (e.g., `incoming_call`, `answered_elsewhere`, `terminated`).
-    *   Attributes include the timestamp of the event and the ID/name of the module involved.
+1. Go to **Settings > Devices & Services**
+2. Click **+ Add Integration** and search for **BTicino Intercom**
+3. Enter your Netatmo account **email** and **password**
+4. If you have multiple homes, select the one with your intercom
+5. Optionally enable "Light as Lock" if your setup uses the lighting relay for the door
 
-*(Entity IDs might vary based on your device names and Home Assistant configuration)*
+> [!TIP]
+> **We strongly recommend creating a dedicated Netatmo account** for Home Assistant instead of using your personal account. See the section below for why and how.
 
-## 📝 Events
+---
 
-The integration fires events that are recorded in the Home Assistant Logbook:
+## Recommended: Use a Dedicated Account
 
-*   `bticino_intercom_incoming_call`: Fired when a call is detected.
-*   `bticino_intercom_answered_elsewhere`: Fired when a call is answered by another device/app.
-*   `bticino_intercom_terminated`: Fired when a call is terminated (hung up).
+The BTicino/Netatmo cloud API has limitations on concurrent sessions. If you use the same account on both the Home + Security app and Home Assistant, you may experience:
 
-## ⚠️ Known Issues & Limitations
+- WebSocket disconnections
+- Delayed notifications
+- Intermittent API errors
 
-*   **Cloud Dependent:** This integration requires a working internet connection and access to the BTicino/Netatmo cloud services. 🌐
-*   **WebSocket Reliability:** Real-time call events depend on a stable WebSocket connection. If the connection drops, events might be delayed until the next poll or missed entirely. The integration attempts to automatically reconnect.
-*   **Optimistic Lock State:** The lock entity uses optimistic updates. When you trigger 'Open', the state immediately shows 'Unlocking' and then 'Locked' after a few seconds. The actual lock state is confirmed during the next coordinator update.
-*   **API Rate Limits:** Excessive use might potentially lead to temporary blocks by the BTicino API (though specific limits are unknown). The default polling interval is set conservatively.
+### How to create a dedicated account (5 minutes)
 
-## 🤝 Contributing & Support
+Gmail (and Google Workspace) supports **address aliases** using the `+` character. This lets you create a new Netatmo account without needing a separate email address.
 
-Found a bug or have a feature request? Please open an issue on the [GitHub repository](https://github.com/k-the-hidden-hero/bticino_intercom/issues). Pull requests are also welcome! 🙌
+For example, if your email is `yourname@gmail.com`, you can use:
 
-## 🙏 Acknowledgements
+```
+yourname+homeassistant@gmail.com
+```
 
-*   This integration relies heavily on the fantastic [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Many thanks to the original author(s)!
+All emails sent to this address will arrive in your existing `yourname@gmail.com` inbox. No setup needed — it works automatically. ([Learn more about Gmail aliases](https://support.google.com/mail/answer/22370))
 
-## 📜 License
+**Step by step:**
 
-This project is licensed under the MIT License - see the LICENSE file for details (assuming MIT, please add a LICENSE file if you haven't!).
+1. **Create a new Netatmo account** at [my.netatmo.com](https://my.netatmo.com) using your `+homeassistant` alias email
+2. **Set a strong password** for this account
+3. **Open the Home + Security app** on your phone (logged in with your main account)
+4. Go to your **Home settings** and **invite** the new alias email as a member
+5. **Accept the invitation** by logging into the Home + Security app with the new account (you can use a second device, or log out and back in)
+6. **Use the new account credentials** when setting up the BTicino Intercom integration in Home Assistant
+
+Now your phone app and Home Assistant use separate accounts, each with their own session, and both have full access to the same home.
+
+---
+
+## How it works
+
+### Architecture
+
+```
+BTicino Intercom <---> Netatmo Cloud <---> Home Assistant
+                          |
+                    +-----------+
+                    | REST API  |  Polling every 5 min (topology, status, events)
+                    +-----------+
+                    | WebSocket |  Real-time push (call events, state changes)
+                    +-----------+
+```
+
+### WebSocket connection
+
+The integration maintains a persistent WebSocket connection to the Netatmo push server (`wss://app-ws.netatmo.net/ws/`). This is the same mechanism used by the official Android/iOS app to receive real-time notifications.
+
+When someone rings your doorbell, the event is delivered via WebSocket in under a second. The integration processes it and immediately updates the binary sensor, fires a logbook event, and dispatches a signal for automations.
+
+As a fallback, the integration also polls the API every 5 minutes. If the WebSocket connection drops, it automatically reconnects with an exponential backoff strategy.
+
+A **watchdog** monitors WebSocket health: if no messages are received for 10 minutes, the connection is flagged as stale and forcefully reconnected.
+
+### Data flow
+
+1. **Startup**: authenticates via OAuth2, fetches home topology, creates entities
+2. **Polling** (every 5 min): refreshes module status, event history, bridge diagnostics
+3. **WebSocket push**: real-time call events (ring, answer, terminate) update entities immediately
+4. **Actions**: lock/unlock and light on/off send commands via the REST API
+
+---
+
+## Troubleshooting
+
+### Enable debug logging
+
+Add to your `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.bticino_intercom: debug
+    pybticino: debug
+```
+
+### Common issues
+
+| Problem | Cause | Solution |
+|---|---|---|
+| WebSocket errors at startup | Normal during first connection attempts | Wait 1-2 minutes, the integration retries automatically |
+| "Something is blocking startup" | Other integrations (not this one since v1.8.1) | Unrelated to bticino_intercom |
+| Delayed call notifications | WebSocket was disconnected | Check debug logs; the watchdog should reconnect within 10 minutes |
+| Authentication failed | Wrong credentials or expired token | Re-enter credentials in the integration settings |
+| No entities created | Modules not found in topology | Check that your intercom appears in the Home + Security app |
+
+---
+
+## Requirements
+
+- Home Assistant 2026.3 or later
+- Python 3.14 or later (included in HA 2026.3+)
+- A BTicino Classe 100X or 300X connected to the Netatmo cloud
+- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.5.3 (installed automatically)
+
+---
+
+## Contributing
+
+Found a bug or want a feature? [Open an issue](https://github.com/k-the-hidden-hero/bticino_intercom/issues).
+
+Pull requests are welcome. The project uses:
+- **ruff** for linting and formatting
+- **pytest** with `pytest-homeassistant-custom-component` for testing (87 tests)
+- **bandit** for security scanning
+- CI runs on every push and PR
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
