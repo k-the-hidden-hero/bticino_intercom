@@ -104,3 +104,53 @@ async def test_camera_unavailable_without_url(
     snapshot_entity = next(s for s in states if "snapshot" in s)
     state = hass.states.get(snapshot_entity)
     assert state.state == "unavailable"
+
+
+async def test_camera_falls_back_to_history_when_last_event_has_no_image(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test camera finds image in event history when last_event has no snapshot."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
+    snapshot_entity = next(s for s in states if "snapshot" in s)
+
+    # Set last_event to a disconnection (no snapshot) but keep history with images
+    new_data = dict(coordinator.data)
+    new_data["last_event"] = {
+        "type": "disconnection",
+        "module_id": "00:03:50:d9:a6:3b",
+        "time": 1700300000,
+    }
+    new_data["events_history"] = {
+        coordinator.home_id: [
+            {
+                "id": "evt_disconnect",
+                "type": "disconnection",
+                "time": 1700300000,
+            },
+            {
+                "id": "evt_call",
+                "type": "call",
+                "module_id": EXT_UNIT_MODULE_ID,
+                "time": 1700200000,
+                "subevents": [
+                    {
+                        "type": "missed_call",
+                        "time": 1700200050,
+                        "snapshot": {
+                            "url": "https://example.com/fallback_snapshot.jpg",
+                            "expires_at": 1700400000,
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+    coordinator.async_set_updated_data(new_data)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(snapshot_entity)
+    # Camera should fall back to the call event with snapshot from history
+    assert state.state != "unavailable"
+    assert state.attributes.get("image_url") == "https://example.com/fallback_snapshot.jpg"

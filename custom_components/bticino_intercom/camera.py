@@ -115,27 +115,40 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             self._cached_image_time = None
         self.async_write_ha_state()
 
+    def _extract_image_from_event(self, event: dict) -> tuple[str | None, int | float | None, int | float | None]:
+        """Extract image URL, expiry, and event time from an event dict.
+
+        Returns (image_url, expires_at_ts, event_time_ts) or (None, None, time) if no image.
+        """
+        event_time_ts = event.get("time") or event.get("timestamp")
+        subevents = event.get("subevents")
+        if subevents and isinstance(subevents, list) and len(subevents) > 0:
+            first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
+            event_time_ts = first_subevent.get("time") or event_time_ts
+            image_data = first_subevent.get(self._image_type)
+            if isinstance(image_data, dict) and image_data.get("url"):
+                return image_data["url"], image_data.get("expires_at"), event_time_ts
+        return None, None, event_time_ts
+
     def _update_state_internal(self) -> None:
         """Update internal state variables from coordinator data."""
         image_url = None
         expires_at_ts = None
         event_time_ts = None
 
+        # First check the last WS event (most recent, real-time)
         last_event = self.coordinator.data.get("last_event")
-        if not last_event:
-            events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
-            last_event = events[0] if events else None
-
         if last_event:
-            event_time_ts = last_event.get("time") or last_event.get("timestamp")
-            subevents = last_event.get("subevents")
-            if subevents and isinstance(subevents, list) and len(subevents) > 0:
-                first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
-                event_time_ts = first_subevent.get("time") or event_time_ts  # Prioritize subevent time
-                image_data = first_subevent.get(self._image_type)
-                if isinstance(image_data, dict):
-                    image_url = image_data.get("url")
-                    expires_at_ts = image_data.get("expires_at")
+            image_url, expires_at_ts, event_time_ts = self._extract_image_from_event(last_event)
+
+        # If no image found in last_event, search through event history
+        if not image_url:
+            events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
+            for event in events:
+                url, exp, evt_time = self._extract_image_from_event(event)
+                if url:
+                    image_url, expires_at_ts, event_time_ts = url, exp, evt_time
+                    break
 
         self._image_url = image_url
         self._image_expires_at = (
