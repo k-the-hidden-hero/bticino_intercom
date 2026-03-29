@@ -139,10 +139,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Get the listener task from the client
                     listener_task = websocket_client.get_listener_task()
                     if listener_task:
-                        # Wait for the listener task to complete (indicates disconnection)
+                        # Wait for the listener task, but periodically check for stale WS
                         _LOGGER.debug("Waiting for WebSocket listener task to complete...")
-                        await listener_task
-                        _LOGGER.info("WebSocket listener task finished cleanly.")
+                        while not listener_task.done():
+                            try:
+                                await asyncio.wait_for(asyncio.shield(listener_task), timeout=60)
+                            except TimeoutError:
+                                # Check if coordinator flagged WS as stale
+                                if coordinator.ws_stale:
+                                    _LOGGER.warning("WebSocket flagged as stale by coordinator, forcing reconnect")
+                                    listener_task.cancel()
+                                    with suppress(asyncio.CancelledError):
+                                        await listener_task
+                                    break
+                                # Otherwise keep waiting
+                            except asyncio.CancelledError:
+                                raise
+                        else:
+                            _LOGGER.info("WebSocket listener task finished cleanly.")
                     else:
                         _LOGGER.warning("Could not get listener task after connect. Treating as disconnection.")
 

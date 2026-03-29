@@ -27,6 +27,12 @@ from .const import (
     UPDATE_INTERVAL,
 )
 
+# WebSocket is considered stale if no message received for this many seconds.
+# The server sends periodic pings (every 20s) that count as messages in the
+# websockets library, so silence beyond this threshold means the connection
+# is likely dead but not yet detected by TCP keepalive.
+WS_STALE_THRESHOLD = 600  # 10 minutes
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -62,6 +68,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._home_name = None
         self._normalized_home_name = None
         self._main_device_id = None
+        self._last_ws_message_time: datetime | None = None
+        self._ws_stale = False
 
     @property
     def main_device_id(self) -> str | None:
@@ -178,6 +186,18 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             if "name" in final_data["homes"][self.home_id]:
                 self._home_name = final_data["homes"][self.home_id]["name"]
                 _LOGGER.debug("Home name set to: %s", self._home_name)
+
+            # Check WebSocket health: if we haven't received a message in a while,
+            # flag the connection as stale so the manager can force a reconnect.
+            if self._last_ws_message_time:
+                silence = (datetime.now(UTC) - self._last_ws_message_time).total_seconds()
+                if silence > WS_STALE_THRESHOLD:
+                    _LOGGER.warning(
+                        "WebSocket has been silent for %ds (threshold %ds), flagging as stale",
+                        int(silence),
+                        WS_STALE_THRESHOLD,
+                    )
+                    self._ws_stale = True
 
             return final_data
 
@@ -323,8 +343,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         return updated
 
+    @property
+    def ws_stale(self) -> bool:
+        """Return True if the WebSocket connection appears stale."""
+        return self._ws_stale
+
     async def _handle_websocket_message(self, message: dict[str, Any]) -> None:
         """Handle incoming WebSocket messages."""
+        self._last_ws_message_time = datetime.now(UTC)
+        self._ws_stale = False
         _LOGGER.debug("Coordinator: _handle_websocket_message called with: %s", message)
         # Directly call _process_websocket_event with the received message
         data_updated = self._process_websocket_event(message)
