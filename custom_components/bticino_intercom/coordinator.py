@@ -6,13 +6,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_EMAIL,
-    CONF_PASSWORD,
-)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pybticino import AsyncAccount, WebsocketClient
@@ -64,7 +59,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             "events_history": {},
         }
         self.home_id: str = entry.data["home_id"]
-        self.session = async_get_clientsession(hass)
         self._home_name = None
         self._normalized_home_name = None
         self._main_device_id = None
@@ -344,19 +338,3 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             # Also request a full refresh to ensure full consistency later
             _LOGGER.debug("Requesting coordinator refresh after WebSocket update.")
             await self.async_request_refresh()
-
-    # Removed async_start_websocket and async_stop_websocket methods
-
-    async def _create_account(self) -> Any | None:
-        """Create a new account instance."""
-        try:
-            account = AsyncAccount(
-                self.entry.data[CONF_EMAIL],
-                self.entry.data[CONF_PASSWORD],
-                session=self.session,
-            )
-            await account.async_authenticate()
-            return account
-        except Exception as err:
-            _LOGGER.error("Error creating account: %s", err)
-            return None
