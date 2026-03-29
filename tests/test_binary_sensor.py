@@ -17,7 +17,7 @@ from custom_components.bticino_intercom.const import (
     SIGNAL_CALL_RECEIVED,
 )
 
-from .conftest import BRIDGE_MAC, EXT_UNIT_MODULE_ID
+from .conftest import EXT_UNIT_MODULE_ID
 
 
 async def test_binary_sensor_entity_created(
@@ -119,9 +119,7 @@ async def test_binary_sensor_extra_attributes(
     entity_id = hass.states.async_entity_ids(BINARY_SENSOR_DOMAIN)[0]
     state = hass.states.get(entity_id)
 
-    assert state.attributes.get("module_id") == EXT_UNIT_MODULE_ID
-    assert state.attributes.get("bridge_id") == BRIDGE_MAC
-    assert "variant" in state.attributes
+    assert state.attributes.get("reachable") is True
 
 
 async def test_binary_sensor_coordinator_update(

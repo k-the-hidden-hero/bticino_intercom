@@ -137,8 +137,7 @@ async def test_light_extra_attributes(
     entity_id = hass.states.async_entity_ids(LIGHT_DOMAIN)[0]
     state = hass.states.get(entity_id)
 
-    assert state.attributes.get("module_id") == LIGHT_MODULE_ID
-    assert state.attributes.get("bridge_id") == BRIDGE_MAC
+    assert state.attributes.get("reachable") is True
 
 
 async def test_light_coordinator_update(

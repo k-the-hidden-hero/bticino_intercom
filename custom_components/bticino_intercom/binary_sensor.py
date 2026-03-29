@@ -24,7 +24,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import format_timestamp_iso, format_uptime_readable
+from .utils import format_timestamp_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -169,72 +169,24 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
         else:
             self._attr_available = module_data.get("reachable", True)
 
-        uptime_sec = module_data.get("uptime")
-        last_interaction_ts = module_data.get("last_user_interaction")
-
-        attrs = {
-            "module_id": self._module_id,
-            "bridge_id": self._bridge_id,
-            "variant": module_data.get("variant"),
-            "firmware_revision": module_data.get("firmware_revision"),
+        attrs: dict[str, Any] = {
             "reachable": module_data.get("reachable"),
-            "configured": module_data.get("configured"),
-            "last_user_interaction": last_interaction_ts,
-            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
-            "uptime": uptime_sec,
-            "uptime_readable": format_uptime_readable(uptime_sec),
-            "websocket_connected": module_data.get("websocket_connected"),
-            "appliance_type": module_data.get("appliance_type"),
-            "associated_locks": self._associated_lock_ids,
         }
 
+        # Add last call info from event history
         events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
-        latest_call_event = None
-        if events:
-            for event in events:
-                if event.get("type") == "call" and event.get("module_id") == self._module_id:
-                    latest_call_event = event
-                    break
-
-        if latest_call_event:
-            snapshot_url = None
-            snapshot_expires_at = None
-            vignette_url = None
-            vignette_expires_at = None
-            subevents = latest_call_event.get("subevents")
-            if subevents and isinstance(subevents, list) and len(subevents) > 0:
-                first_subevent = subevents[0]
-                if isinstance(first_subevent, dict):
+        for event in events:
+            if event.get("type") == "call" and event.get("module_id") == self._module_id:
+                subevents = event.get("subevents")
+                if subevents and isinstance(subevents, list) and len(subevents) > 0:
+                    first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
+                    attrs["last_call_type"] = first_subevent.get("type")
+                    attrs["last_call_time"] = format_timestamp_iso(first_subevent.get("time"))
+                    attrs["last_call_message"] = first_subevent.get("message")
                     snapshot_data = first_subevent.get("snapshot")
                     if isinstance(snapshot_data, dict):
-                        snapshot_url = snapshot_data.get("url")
-                        snapshot_expires_at = snapshot_data.get("expires_at")
-                    vignette_data = first_subevent.get("vignette")
-                    if isinstance(vignette_data, dict):
-                        vignette_url = vignette_data.get("url")
-                        vignette_expires_at = vignette_data.get("expires_at")
-
-            call_start_ts = latest_call_event.get("start")
-            call_end_ts = latest_call_event.get("end")
-
-            attrs.update(
-                {
-                    "call_id": latest_call_event.get("id"),
-                    "call_start": call_start_ts,
-                    "call_end": call_end_ts,
-                    "call_duration": latest_call_event.get("duration"),
-                    "call_type": latest_call_event.get("call_type"),
-                    "call_status": latest_call_event.get("status"),
-                    "snapshot_url": snapshot_url,
-                    "snapshot_expires_at": snapshot_expires_at,
-                    "vignette_url": vignette_url,
-                    "vignette_expires_at": vignette_expires_at,
-                    "call_start_iso": format_timestamp_iso(call_start_ts),
-                    "call_end_iso": format_timestamp_iso(call_end_ts),
-                    "snapshot_expires_at_iso": format_timestamp_iso(snapshot_expires_at),
-                    "vignette_expires_at_iso": format_timestamp_iso(vignette_expires_at),
-                }
-            )
+                        attrs["snapshot_url"] = snapshot_data.get("url")
+                break
 
         self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
 

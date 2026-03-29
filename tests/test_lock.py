@@ -143,9 +143,7 @@ async def test_lock_extra_attributes(
     entity_id = next(s for s in hass.states.async_entity_ids(LOCK_DOMAIN) if "light_as_lock" not in s)
     state = hass.states.get(entity_id)
 
-    assert state.attributes.get("module_id") == LOCK_MODULE_ID
-    assert state.attributes.get("bridge_id") == BRIDGE_MAC
-    assert "variant" in state.attributes
+    assert state.attributes.get("reachable") is True
 
 
 async def test_lock_coordinator_update(

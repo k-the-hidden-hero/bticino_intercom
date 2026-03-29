@@ -18,7 +18,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import format_timestamp_iso, format_uptime_readable
+from .utils import format_timestamp_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,23 +120,9 @@ class BticinoLock(BticinoEntity, LockEntity):
         if not module_data:
             return None
 
-        uptime_sec = module_data.get("uptime")
-        last_interaction_ts = module_data.get("last_user_interaction")
-
         attrs = {
-            "module_id": self._module_id,
-            "bridge_id": self._bridge_id,
-            "variant": module_data.get("variant"),
-            "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
-            "configured": module_data.get("configured"),
-            "last_user_interaction": last_interaction_ts,
-            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
-            "appliance_type": module_data.get("appliance_type"),
-            "local_ipv4": module_data.get("local_ipv4"),
-            "wifi_strength": module_data.get("wifi_strength"),
-            "uptime": uptime_sec,
-            "uptime_readable": format_uptime_readable(uptime_sec),
+            "last_used": format_timestamp_iso(module_data.get("last_user_interaction")),
         }
         return {k: v for k, v in attrs.items() if v is not None}
 
@@ -260,23 +246,9 @@ class BticinoLightAsLock(BticinoEntity, LockEntity):
         if not module_data:
             return None
 
-        uptime_sec = module_data.get("uptime")
-        last_interaction_ts = module_data.get("last_user_interaction")
-
         attrs = {
-            "module_id": self._module_id,
-            "bridge_id": self._bridge_id,
-            "variant": module_data.get("variant"),
-            "firmware_revision": module_data.get("firmware_revision"),
             "reachable": module_data.get("reachable"),
-            "configured": module_data.get("configured"),
-            "last_user_interaction": last_interaction_ts,
-            "last_user_interaction_iso": format_timestamp_iso(last_interaction_ts),
-            "uptime": uptime_sec,
-            "uptime_readable": format_uptime_readable(uptime_sec),
-            "appliance_type": module_data.get("appliance_type"),
-            "local_ipv4": module_data.get("local_ipv4"),
-            "wifi_strength": module_data.get("wifi_strength"),
+            "last_used": format_timestamp_iso(module_data.get("last_user_interaction")),
             "represented_as": "lock",
         }
         return {k: v for k, v in attrs.items() if v is not None}
