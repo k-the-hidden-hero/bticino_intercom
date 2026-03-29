@@ -64,12 +64,18 @@ Click the button above to add the repository. This opens HACS in your Home Assis
 2. Paste `https://github.com/k-the-hidden-hero/bticino_intercom` as the URL
 3. Select **Integration** as the category and click **Add**
 
-**Step 2 — Install the integration:**
+**Step 2 — Download the integration:**
 
 1. In HACS, find **BTicino Intercom** in the integration list (search if needed)
 2. Click on it, then click **Download** (bottom right)
 3. Select the latest version and confirm
 4. **Restart Home Assistant**
+
+**Step 3 — Add the integration to Home Assistant:**
+
+[![Add Integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=bticino_intercom)
+
+Click the button above to start the setup, or go to **Settings > Devices & Services > + Add Integration** and search for **BTicino Intercom**.
 
 ### Manual
 
@@ -81,11 +87,7 @@ Click the button above to add the repository. This opens HACS in your Home Assis
 
 ## Setup
 
-1. Go to **Settings > Devices & Services**
-2. Click **+ Add Integration** and search for **BTicino Intercom**
-3. Enter your Netatmo account **email** and **password**
-4. If you have multiple homes, select the one with your intercom
-5. Optionally enable "Light as Lock" if your setup uses the lighting relay for the door
+During setup you will be asked to enter your Netatmo account **email** and **password**. If you have multiple homes, you'll select the one with your intercom. You can also enable "Light as Lock" if your setup uses the lighting relay for the door.
 
 > [!TIP]
 > **We strongly recommend creating a dedicated Netatmo account** for Home Assistant instead of using your personal account. See the section below for why and how.
