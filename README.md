@@ -52,17 +52,24 @@ Some BTicino installations use the lighting relay instead of a dedicated lock mo
 
 ### HACS (recommended)
 
-[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-the-hidden-hero&repository=bticino_intercom&category=integration)
+> **Prerequisites:** You need [HACS](https://hacs.xyz/) installed in your Home Assistant. If you don't have it yet, follow the [HACS installation guide](https://hacs.xyz/docs/use/download/download/) first.
 
-Click the button above, or manually:
+**Step 1 — Add the repository to HACS:**
 
-1. Open **HACS** in Home Assistant
-2. Go to **Integrations** and click the **three-dot menu** (top right)
-3. Select **Custom repositories**
-4. Enter `https://github.com/k-the-hidden-hero/bticino_intercom` as the URL
-5. Select **Integration** as the category and click **Add**
-6. Find **BTicino Intercom** in the list and click **Install**
-7. **Restart Home Assistant**
+[![Add Repository](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-the-hidden-hero&repository=bticino_intercom&category=integration)
+
+Click the button above to add the repository. This opens HACS in your Home Assistant and adds the BTicino Intercom repository. If the button doesn't work, add it manually:
+
+1. Open **HACS** > **Integrations** > click the **three-dot menu** (top right) > **Custom repositories**
+2. Paste `https://github.com/k-the-hidden-hero/bticino_intercom` as the URL
+3. Select **Integration** as the category and click **Add**
+
+**Step 2 — Install the integration:**
+
+1. In HACS, find **BTicino Intercom** in the integration list (search if needed)
+2. Click on it, then click **Download** (bottom right)
+3. Select the latest version and confirm
+4. **Restart Home Assistant**
 
 ### Manual
 
