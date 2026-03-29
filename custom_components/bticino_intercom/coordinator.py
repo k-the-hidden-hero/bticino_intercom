@@ -1,40 +1,37 @@
 """Data update coordinator for the BTicino Intercom integration."""
 
-import asyncio
 import logging
-from typing import Any, Callable, Dict, Optional
-from datetime import timedelta, datetime, UTC
-import copy
 import re
-
-from pybticino import AsyncAccount, WebsocketClient, AuthHandler
-from pybticino.exceptions import PyBticinoException, ApiError, AuthError
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_USERNAME,
-    CONF_EMAIL,
-    CONF_PASSWORD,
-)
-from homeassistant.core import HomeAssistant, callback
-
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from pybticino import AsyncAccount, WebsocketClient
+from pybticino.exceptions import ApiError, AuthError
 
 from .const import (
-    DOMAIN,
-    SIGNAL_CALL_RECEIVED,
-    EVENT_TYPE_INCOMING_CALL,
-    EVENT_TYPE_ANSWERED_ELSEWHERE,
-    EVENT_TYPE_TERMINATED,
-    EVENT_LOGBOOK_INCOMING_CALL,
-    EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
-    EVENT_LOGBOOK_TERMINATED,
     DATA_LAST_EVENT,
+    DEFAULT_NAME,
+    DOMAIN,
+    EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
+    EVENT_LOGBOOK_INCOMING_CALL,
+    EVENT_LOGBOOK_TERMINATED,
+    EVENT_TYPE_ANSWERED_ELSEWHERE,
+    EVENT_TYPE_INCOMING_CALL,
+    EVENT_TYPE_TERMINATED,
+    SIGNAL_CALL_RECEIVED,
     UPDATE_INTERVAL,
 )
+
+# WebSocket is considered stale if no message received for this many seconds.
+# The server sends periodic pings (every 20s) that count as messages in the
+# websockets library, so silence beyond this threshold means the connection
+# is likely dead but not yet detected by TCP keepalive.
+WS_STALE_THRESHOLD = 600  # 10 minutes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +55,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER,
             name=f"{DOMAIN} Coordinator - {entry.entry_id}",
             update_interval=timedelta(minutes=UPDATE_INTERVAL),
-            update_method=self._async_update_data,
         )
 
         self.entry = entry
@@ -69,10 +65,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             "events_history": {},
         }
         self.home_id: str = entry.data["home_id"]
-        self.session = async_get_clientsession(hass)
         self._home_name = None
         self._normalized_home_name = None
         self._main_device_id = None
+        self._last_ws_message_time: datetime | None = None
+        self._ws_stale = False
+
+    @property
+    def main_device_id(self) -> str | None:
+        """Return the main bridge device ID."""
+        return self._main_device_id
 
     @property
     def home_name(self) -> str:
@@ -103,9 +105,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     DATA_LAST_EVENT: {},
                 }
             if self.home_id not in self.account.homes:
-                raise UpdateFailed(
-                    f"Selected home_id {self.home_id} not found in account topology."
-                )
+                raise UpdateFailed(f"Selected home_id {self.home_id} not found in account topology.")
 
             selected_home_obj = self.account.homes[self.home_id]
             homes_data[self.home_id] = selected_home_obj.raw_data
@@ -119,7 +119,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 # Check if the module ID matches the MAC address pattern and we haven't found the bridge yet
                 if not bridge_module and mac_address_pattern.match(module_obj.id):
                     bridge_module = module_obj
-                    _LOGGER.debug(f"Found bridge module with MAC ID: {module_obj.id}")
+                    _LOGGER.debug("Found bridge module with MAC ID: %s", module_obj.id)
                     # Do NOT break, continue populating modules_data
 
             if not bridge_module:
@@ -132,9 +132,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     "No bridge module found (expected ID formatted as MAC address). Available modules: %s",
                     available_modules_info,
                 )
-                raise UpdateFailed(
-                    "No bridge module found in the system (MAC address ID check failed)"
-                )
+                raise UpdateFailed("No bridge module found in the system (MAC address ID check failed)")
 
             # Store the bridge module ID as our main device ID
             self._main_device_id = bridge_module.id
@@ -142,13 +140,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             # Fetch Status Data
             try:
                 status_data = await self.account.async_get_home_status(self.home_id)
-                modules_status = (
-                    status_data.get("body", {}).get("home", {}).get("modules", [])
-                )
+                modules_status = status_data.get("body", {}).get("home", {}).get("modules", [])
             except (ApiError, AuthError) as err:
-                _LOGGER.warning(
-                    "Failed to fetch status for home %s: %s", self.home_id, err
-                )
+                _LOGGER.warning("Failed to fetch status for home %s: %s", self.home_id, err)
                 modules_status = []
 
             # Update modules with status data
@@ -165,7 +159,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 config_entry_id=self.entry.entry_id,
                 identifiers={(DOMAIN, self._main_device_id)},
                 manufacturer="BTicino",
-                model="Classe 100X16E",
+                model=bridge_module.raw_data.get("type", DEFAULT_NAME),
                 name=f"BTicino Intercom - {self.home_name}",
                 sw_version=str(
                     bridge_module.raw_data.get("firmware_name")
@@ -177,13 +171,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             events_history_data = {}
             try:
                 events_data = await self.account.async_get_events(self.home_id, size=20)
-                events_history_data[self.home_id] = (
-                    events_data.get("body", {}).get("home", {}).get("events", [])
-                )
+                events_history_data[self.home_id] = events_data.get("body", {}).get("home", {}).get("events", [])
             except (ApiError, AuthError) as err:
-                _LOGGER.warning(
-                    "Failed to fetch events for home %s: %s", self.home_id, err
-                )
+                _LOGGER.warning("Failed to fetch events for home %s: %s", self.home_id, err)
                 events_history_data[self.home_id] = []
 
             final_data = {
@@ -196,6 +186,18 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             if "name" in final_data["homes"][self.home_id]:
                 self._home_name = final_data["homes"][self.home_id]["name"]
                 _LOGGER.debug("Home name set to: %s", self._home_name)
+
+            # Check WebSocket health: if we haven't received a message in a while,
+            # flag the connection as stale so the manager can force a reconnect.
+            if self._last_ws_message_time:
+                silence = (datetime.now(UTC) - self._last_ws_message_time).total_seconds()
+                if silence > WS_STALE_THRESHOLD:
+                    _LOGGER.warning(
+                        "WebSocket has been silent for %ds (threshold %ds), flagging as stale",
+                        int(silence),
+                        WS_STALE_THRESHOLD,
+                    )
+                    self._ws_stale = True
 
             return final_data
 
@@ -217,20 +219,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         module_id = session_data.get("module_id") or extra_params.get("device_id")
 
         if not module_id:
-            _LOGGER.debug(
-                "Websocket event without relevant module/device ID: %s", message
-            )
+            _LOGGER.debug("Websocket event without relevant module/device ID: %s", message)
             return False
 
         # Check if module exists in coordinator data (use self.data)
         if module_id not in self.data.get("modules", {}):
-            _LOGGER.warning(
-                "Websocket event for unknown module %s: %s", module_id, message
-            )
+            _LOGGER.warning("Websocket event for unknown module %s: %s", module_id, message)
             # Optionally try the device_id if module_id wasn't the primary one found
-            if module_id != extra_params.get("device_id") and extra_params.get(
-                "device_id"
-            ) in self.data.get("modules", {}):
+            if module_id != extra_params.get("device_id") and extra_params.get("device_id") in self.data.get(
+                "modules", {}
+            ):
                 module_id = extra_params.get("device_id")
                 _LOGGER.debug("Falling back to device_id %s", module_id)
             else:
@@ -242,27 +240,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         # --- Handle RTC Events (Call, Rescind, Terminate) based on session_data type ---
         rtc_event_type = session_data.get("type")
         if rtc_event_type in ["call", "rescind", "terminate"]:
-            calling_module_id = session_data.get(
-                "module_id", module_id
-            )  # Module initiating/involved
-            calling_module_name = (
-                self.data.get("modules", {})
-                .get(calling_module_id, {})
-                .get("name", calling_module_id)
-            )
+            calling_module_id = session_data.get("module_id", module_id)  # Module initiating/involved
+            calling_module_name = self.data.get("modules", {}).get(calling_module_id, {}).get("name", calling_module_id)
 
             new_event_type = None
             log_message = None
 
             if rtc_event_type == "call":
                 new_event_type = EVENT_TYPE_INCOMING_CALL
-                log_message = (
-                    f"Incoming call detected via RTC for module {calling_module_id}"
-                )
+                log_message = f"Incoming call detected via RTC for module {calling_module_id}"
                 # Dispatch signal for binary sensor
-                async_dispatcher_send(
-                    self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id
-                )
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
                 # Fire Logbook event
                 self.hass.bus.async_fire(
                     EVENT_LOGBOOK_INCOMING_CALL,
@@ -275,9 +263,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 new_event_type = EVENT_TYPE_ANSWERED_ELSEWHERE
                 log_message = f"Call answered elsewhere for module {calling_module_id}"
                 # Dispatch signal to turn off binary sensor
-                async_dispatcher_send(
-                    self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id
-                )
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
                 # Fire Logbook event
                 self.hass.bus.async_fire(
                     EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
@@ -290,9 +276,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 new_event_type = EVENT_TYPE_TERMINATED
                 log_message = f"Call terminated/hung up for module {calling_module_id}"
                 # Dispatch signal to turn off binary sensor
-                async_dispatcher_send(
-                    self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id
-                )
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
                 # Fire Logbook event
                 self.hass.bus.async_fire(
                     EVENT_LOGBOOK_TERMINATED,
@@ -312,15 +296,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 # Update last event data
                 self.data[DATA_LAST_EVENT] = {
                     "type": new_event_type,
-                    "timestamp": datetime.now(UTC), # This is the time HA processed the event
-                    "time": session_data.get("time"), # Add original event time if available
+                    "timestamp": datetime.now(UTC),  # This is the time HA processed the event
+                    "time": session_data.get("time"),  # Add original event time if available
                     "module_id": calling_module_id,
                     "module_name": calling_module_name,
                     "subevents": subevents_data,  # Include extracted subevents
-                    "raw_event": message, # Keep raw_event for deeper debugging if needed
+                    "raw_event": message,  # Keep raw_event for deeper debugging if needed
                     # Potentially copy other relevant fields from session_data directly
                     "session_id": session_data.get("session_id"),
-                    "video_status": session_data.get("video_status"), # Example
+                    "video_status": session_data.get("video_status"),  # Example
                 }
                 _LOGGER.debug("Updated last event data (full structure): %s", self.data[DATA_LAST_EVENT])
                 updated = True
@@ -336,12 +320,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if not updated and isinstance(extra_params.get("data"), dict):
             possible_state_data = extra_params["data"]
             # Check only if it's NOT an RTC event we already handled
-            if not (rtc_event_type in ["call", "rescind", "terminate"]):
+            if rtc_event_type not in ["call", "rescind", "terminate"]:
                 for key, value in possible_state_data.items():
                     # Avoid overwriting complex structures or already handled types
                     if (
                         key not in ["session_description", "modules", "type"]
-                        and isinstance(value, (str, int, float, bool))
+                        and isinstance(value, str | int | float | bool)
                         and current_module_data.get(key) != value
                     ):
                         _LOGGER.debug(
@@ -351,16 +335,23 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                             current_module_data.get(key),
                             value,
                         )
-                    current_module_data[key] = value
-                    module_updated = True
+                        current_module_data[key] = value
+                        module_updated = True
 
         if module_updated:
             updated = True
 
         return updated
 
+    @property
+    def ws_stale(self) -> bool:
+        """Return True if the WebSocket connection appears stale."""
+        return self._ws_stale
+
     async def _handle_websocket_message(self, message: dict[str, Any]) -> None:
         """Handle incoming WebSocket messages."""
+        self._last_ws_message_time = datetime.now(UTC)
+        self._ws_stale = False
         _LOGGER.debug("Coordinator: _handle_websocket_message called with: %s", message)
         # Directly call _process_websocket_event with the received message
         data_updated = self._process_websocket_event(message)
@@ -373,27 +364,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         if data_updated:
             # Notify listeners immediately with the data updated by the event
-            _LOGGER.debug(
-                "WebSocket message processed, notifying listeners immediately."
-            )
+            _LOGGER.debug("WebSocket message processed, notifying listeners immediately.")
             self.async_set_updated_data(self.data)
 
             # Also request a full refresh to ensure full consistency later
             _LOGGER.debug("Requesting coordinator refresh after WebSocket update.")
             await self.async_request_refresh()
-
-    # Removed async_start_websocket and async_stop_websocket methods
-
-    async def _create_account(self) -> Optional[Any]:
-        """Create a new account instance."""
-        try:
-            account = AsyncAccount(
-                self.entry.data[CONF_EMAIL],
-                self.entry.data[CONF_PASSWORD],
-                session=self.session,
-            )
-            await account.async_authenticate()
-            return account
-        except Exception as err:
-            _LOGGER.error("Error creating account: %s", err)
-            return None

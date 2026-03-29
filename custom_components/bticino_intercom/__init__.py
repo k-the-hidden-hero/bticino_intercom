@@ -2,40 +2,38 @@
 
 import asyncio
 import logging
-from functools import partial  # Import partial if needed for callback, but likely not
+from contextlib import suppress
+
 import websockets  # Import websockets for exception handling
-from contextlib import suppress  # Import suppress
-
-from pybticino import AuthHandler, AsyncAccount, WebsocketClient
-from pybticino.exceptions import AuthError, ApiError, PyBticinoException
-
 from homeassistant import (
     config_entries,
 )  # Needed for config_entries.ConfigEntryNotReady
 from homeassistant.config_entries import ConfigEntry  # Needed for type hints
 from homeassistant.const import (
-    CONF_USERNAME,
     CONF_PASSWORD,
+    CONF_USERNAME,
     # CONF_CLIENT_ID, # Keep commented out
     # CONF_CLIENT_SECRET, # Keep commented out
     EVENT_HOMEASSISTANT_START,
     EVENT_HOMEASSISTANT_STOP,
-    Platform,
 )
 from homeassistant.core import (
-    HomeAssistant,
-    Event as HAEvent,  # Re-add HAEvent type hint
     CoreState,  # Re-add CoreState for check
+    HomeAssistant,
+)
+from homeassistant.core import (
+    Event as HAEvent,  # Re-add HAEvent type hint
 )
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from pybticino import AsyncAccount, AuthHandler, WebsocketClient
+from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
-# Import the coordinator
-from .coordinator import BticinoIntercomCoordinator
 from .const import (
     DOMAIN,
     PLATFORMS,
 )
+from .coordinator import BticinoIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,16 +43,7 @@ RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
-START_LISTENER_REMOVE_KEY = "start_listener_remove"  # Re-add key for listener removal
-
-# List the platforms that need to be set up
-PLATFORMS: list[Platform] = [
-    Platform.LOCK,
-    Platform.LIGHT,
-    Platform.BINARY_SENSOR,
-    Platform.SENSOR,
-    Platform.CAMERA,  # Added camera
-]
+START_LISTENER_REMOVE_KEY = "start_listener_remove"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -83,9 +72,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     account = AsyncAccount(auth_handler)
 
     # Create the coordinator first, so we can pass its message handler
-    coordinator = BticinoIntercomCoordinator(
-        hass, entry, account, None
-    )  # Pass None for websocket initially
+    coordinator = BticinoIntercomCoordinator(hass, entry, account, None)  # Pass None for websocket initially
 
     # Now create the websocket client, passing the coordinator's handler
     # Ensure the callback method exists on the coordinator instance
@@ -128,17 +115,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _websocket_connection_manager() -> None:
         """Manage the WebSocket connection and reconnection."""
         # This function now runs *after* HA has started
-        _LOGGER.info(
-            "Starting WebSocket connection manager task function (triggered by HA start)"
-        )
+        _LOGGER.info("Starting WebSocket connection manager task function (triggered by HA start)")
         is_boot = True  # First connection attempt after startup
         attempt = 0  # Retry counter, resets on successful connection
         # Outer try block to catch unexpected errors in the loop structure itself
         try:
-            while (
-                hass.is_running
-                and entry.state == config_entries.ConfigEntryState.LOADED
-            ):
+            while hass.is_running and entry.state == config_entries.ConfigEntryState.LOADED:
                 _LOGGER.debug(
                     "WebSocket manager loop iteration start. hass.is_running=%s, entry.state=%s",
                     hass.is_running,
@@ -147,13 +129,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 listener_task = None
                 try:
                     # Attempt to connect (includes subscription and starting listener)
-                    _LOGGER.info(
-                        "Attempting WebSocket connect... (calling websocket_client.connect)"
-                    )
+                    _LOGGER.info("Attempting WebSocket connect... (calling websocket_client.connect)")
                     await websocket_client.connect()
-                    _LOGGER.info(
-                        "WebSocket connect call completed without raising immediate exception."
-                    )
+                    _LOGGER.info("WebSocket connect call completed without raising immediate exception.")
                     # Connection succeeded: reset retry state
                     attempt = 0
                     is_boot = False
@@ -161,21 +139,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Get the listener task from the client
                     listener_task = websocket_client.get_listener_task()
                     if listener_task:
-                        # Wait for the listener task to complete (indicates disconnection)
-                        _LOGGER.debug(
-                            "Waiting for WebSocket listener task to complete..."
-                        )
-                        await listener_task
-                        _LOGGER.info("WebSocket listener task finished cleanly.")
+                        # Wait for the listener task, but periodically check for stale WS
+                        _LOGGER.debug("Waiting for WebSocket listener task to complete...")
+                        while not listener_task.done():
+                            try:
+                                await asyncio.wait_for(asyncio.shield(listener_task), timeout=60)
+                            except TimeoutError:
+                                # Check if coordinator flagged WS as stale
+                                if coordinator.ws_stale:
+                                    _LOGGER.warning("WebSocket flagged as stale by coordinator, forcing reconnect")
+                                    listener_task.cancel()
+                                    with suppress(asyncio.CancelledError):
+                                        await listener_task
+                                    break
+                                # Otherwise keep waiting
+                            except asyncio.CancelledError:
+                                raise
+                        else:
+                            _LOGGER.info("WebSocket listener task finished cleanly.")
                     else:
-                        _LOGGER.warning(
-                            "Could not get listener task after connect. Treating as disconnection."
-                        )
+                        _LOGGER.warning("Could not get listener task after connect. Treating as disconnection.")
 
                 except asyncio.CancelledError:
-                    _LOGGER.info(
-                        "WebSocket connection manager task cancelled during connect/listen."
-                    )
+                    _LOGGER.info("WebSocket connection manager task cancelled during connect/listen.")
                     # Important: Re-raise CancelledError so the outer try block doesn't treat it as an unexpected error
                     raise
                 except AuthError as err:
@@ -194,7 +180,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         err,
                         RECONNECT_DELAY,
                     )
-                except Exception as err:
+                except Exception:
                     # Catch-all for other unexpected errors during connect/listen
                     _LOGGER.exception(
                         "Unexpected error in WebSocket connection manager during connect/listen. Retrying in %d seconds...",
@@ -202,9 +188,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                 finally:  # Finally for the inner try (connect/listen attempt)
                     # Ensure disconnect is called before retrying or exiting this attempt
-                    _LOGGER.debug(
-                        "WebSocket manager: Entering finally block for cleanup after attempt."
-                    )
+                    _LOGGER.debug("WebSocket manager: Entering finally block for cleanup after attempt.")
                     # Cancel listener task explicitly if it's still somehow running
                     if listener_task and not listener_task.done():
                         _LOGGER.debug("Cancelling listener task in finally block.")
@@ -217,10 +201,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 # --- Smart Reconnect Delay Logic ---
                 _LOGGER.debug("WebSocket manager: Reached reconnect delay logic.")
-                if (
-                    hass.is_running
-                    and entry.state == config_entries.ConfigEntryState.LOADED
-                ):
+                if hass.is_running and entry.state == config_entries.ConfigEntryState.LOADED:
                     # Pick delay from appropriate backoff schedule
                     delays = BOOT_RETRY_DELAYS if is_boot else RUNTIME_RETRY_DELAYS
                     delay = delays[min(attempt, len(delays) - 1)]
@@ -234,15 +215,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     try:
                         await asyncio.sleep(delay)
                     except asyncio.CancelledError:
-                        _LOGGER.info(
-                            "Reconnect delay interrupted by cancellation. Exiting manager loop."
-                        )
+                        _LOGGER.info("Reconnect delay interrupted by cancellation. Exiting manager loop.")
                         break  # Exit while loop if cancelled during sleep
                 else:
                     # If HA is stopping or entry unloaded, exit the loop
-                    _LOGGER.info(
-                        "Exiting WebSocket manager loop because hass is not running or entry is not loaded."
-                    )
+                    _LOGGER.info("Exiting WebSocket manager loop because hass is not running or entry is not loaded.")
                     break  # Exit while loop
 
         # Catch any unexpected error in the main loop logic itself (outside the inner try)
@@ -268,9 +245,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Check if entry still exists in hass.data
         entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if not entry_data or entry_data.get(WEBSOCKET_TASK_KEY):
-            _LOGGER.debug(
-                "WebSocket manager task already exists or entry data missing."
-            )
+            _LOGGER.debug("WebSocket manager task already exists or entry data missing.")
             return
 
         _LOGGER.debug("Creating and storing WebSocket connection manager task.")
@@ -284,19 +259,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Schedule the WebSocket start after HA starts
     if hass.state == CoreState.running:
         # HA is already running, start WS manager task immediately
-        _LOGGER.debug(
-            "Home Assistant already running, starting WebSocket manager directly."
-        )
+        _LOGGER.debug("Home Assistant already running, starting WebSocket manager directly.")
         await _async_start_websocket_manager()
         start_listener_remove = None  # No listener needed
     else:
         # HA is starting, listen for the start event
-        _LOGGER.debug(
-            "Home Assistant starting, scheduling WebSocket manager via listener."
-        )
-        start_listener_remove = hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_START, _async_start_websocket_manager
-        )
+        _LOGGER.debug("Home Assistant starting, scheduling WebSocket manager via listener.")
+        start_listener_remove = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _async_start_websocket_manager)
 
     # Store the removal function for the start listener
     hass.data[DOMAIN][entry.entry_id][START_LISTENER_REMOVE_KEY] = start_listener_remove
@@ -312,9 +281,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             with suppress(asyncio.CancelledError):
                 await ws_task
 
-    entry.async_on_unload(
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_cancel_websocket_on_stop)
-    )
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_cancel_websocket_on_stop))
 
     return True
 
@@ -351,14 +318,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Clean up hass.data[DOMAIN][entry.entry_id] only if unload succeeded
-    if unload_ok:
-        if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-            hass.data[DOMAIN].pop(entry.entry_id)
-            _LOGGER.debug("Removed entry data for %s from hass.data", entry.entry_id)
-            # If this was the last entry, remove the domain key
-            if not hass.data[DOMAIN]:
-                hass.data.pop(DOMAIN)
-                _LOGGER.debug("Removed domain %s from hass.data", DOMAIN)
+    if unload_ok and DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
+        hass.data[DOMAIN].pop(entry.entry_id)
+        _LOGGER.debug("Removed entry data for %s from hass.data", entry.entry_id)
+        # If this was the last entry, remove the domain key
+        if not hass.data[DOMAIN]:
+            hass.data.pop(DOMAIN)
+            _LOGGER.debug("Removed domain %s from hass.data", DOMAIN)
 
     _LOGGER.info("BTicino integration entry %s unloaded: %s", entry.entry_id, unload_ok)
     return unload_ok
@@ -366,9 +332,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry when options change."""
-    _LOGGER.info(
-        "Reloading BTicino integration entry due to options update: %s", entry.entry_id
-    )
+    _LOGGER.info("Reloading BTicino integration entry due to options update: %s", entry.entry_id)
     # Explicitly call the reload function to ensure the unload/setup cycle runs
     await hass.config_entries.async_reload(entry.entry_id)
     # The listener registration itself ensures this function is called.
