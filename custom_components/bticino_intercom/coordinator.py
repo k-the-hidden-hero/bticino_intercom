@@ -48,7 +48,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER,
             name=f"{DOMAIN} Coordinator - {entry.entry_id}",
             update_interval=timedelta(minutes=UPDATE_INTERVAL),
-            update_method=self._async_update_data,
         )
 
         self.entry = entry
