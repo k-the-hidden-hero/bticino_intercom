@@ -1,7 +1,8 @@
 """Utility functions for the BTicino integration."""
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
+
 from homeassistant.util.dt import utc_from_timestamp
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,13 +20,13 @@ def format_timestamp_iso(timestamp: int | float | datetime | None) -> str | None
     """
     if isinstance(timestamp, datetime):
         if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp = timestamp.replace(tzinfo=UTC)
         return timestamp.isoformat()
-    if isinstance(timestamp, (int, float)) and timestamp > 0:
+    if isinstance(timestamp, int | float) and timestamp > 0:
         try:
             return utc_from_timestamp(timestamp).isoformat()
         except (TypeError, ValueError):
-            _LOGGER.warning(f"Could not convert timestamp {timestamp} to datetime")
+            _LOGGER.warning("Could not convert timestamp %s to datetime", timestamp)
             return None
     return None
 
@@ -45,5 +46,5 @@ def format_uptime_readable(uptime_seconds: int | None) -> str | None:
     try:
         return str(timedelta(seconds=uptime_seconds))
     except OverflowError:
-        _LOGGER.warning(f"Uptime value {uptime_seconds} is too large to format.")
+        _LOGGER.warning("Uptime value %s is too large to format.", uptime_seconds)
         return "Overflow"

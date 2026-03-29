@@ -1,16 +1,15 @@
 """Platform for sensor integration."""
 
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar
 
 from homeassistant.components.sensor import (
-    SensorEntity,
     SensorDeviceClass,
+    SensorEntity,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime, SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+from homeassistant.const import SIGNAL_STRENGTH_DECIBELS_MILLIWATT, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -19,8 +18,8 @@ from homeassistant.util.dt import utc_from_timestamp
 
 from .const import (
     DOMAIN,
-    EVENT_TYPE_INCOMING_CALL,
     EVENT_TYPE_ANSWERED_ELSEWHERE,
+    EVENT_TYPE_INCOMING_CALL,
     EVENT_TYPE_TERMINATED,
 )
 from .coordinator import BticinoIntercomCoordinator
@@ -35,9 +34,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the BTicino sensor platform."""
-    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id][
-        "coordinator"
-    ]
+    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     # Allow event sensors even if bridge ID is missing initially?
     # Let's require bridge ID for consistency now.
@@ -57,29 +54,13 @@ async def async_setup_entry(
     # --- Bridge Status Sensors (Keep as is) ---
     if bridge_module_data:
         _LOGGER.debug("Found bridge module data for sensor setup: %s", bridge_id)
-        entities.append(
-            BticinoBridgeUptimeSensor(coordinator, bridge_id, bridge_module_data)
-        )
-        entities.append(
-            BticinoBridgeWifiStrengthSensor(coordinator, bridge_id, bridge_module_data)
-        )
-        entities.append(
-            BticinoBridgeWebsocketStatusSensor(
-                coordinator, bridge_id, bridge_module_data
-            )
-        )
-        entities.append(
-            BticinoBridgeLocalIpSensor(coordinator, bridge_id, bridge_module_data)
-        )
-        entities.append(
-            BticinoBridgeLastConfigUpdateSensor(
-                coordinator, bridge_id, bridge_module_data
-            )
-        )
+        entities.append(BticinoBridgeUptimeSensor(coordinator, bridge_id, bridge_module_data))
+        entities.append(BticinoBridgeWifiStrengthSensor(coordinator, bridge_id, bridge_module_data))
+        entities.append(BticinoBridgeWebsocketStatusSensor(coordinator, bridge_id, bridge_module_data))
+        entities.append(BticinoBridgeLocalIpSensor(coordinator, bridge_id, bridge_module_data))
+        entities.append(BticinoBridgeLastConfigUpdateSensor(coordinator, bridge_id, bridge_module_data))
         if bridge_module_data.get("last_seen", 0) > 0:
-            entities.append(
-                BticinoBridgeLastSeenSensor(coordinator, bridge_id, bridge_module_data)
-            )
+            entities.append(BticinoBridgeLastSeenSensor(coordinator, bridge_id, bridge_module_data))
         else:
             _LOGGER.debug("Skipping Last Seen sensor, timestamp is 0.")
     else:
@@ -113,17 +94,11 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
         if self.coordinator._main_device_id:
             # Reuse the logic from BridgeBaseSensor to ensure consistency
             device_name = (
-                f"BTicino Intercom - {self.coordinator.home_name}"
-                if self.coordinator.home_name
-                else "BTicino Intercom"
+                f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
             )
-            bridge_module_data = self.coordinator.data.get("modules", {}).get(
-                self.coordinator._main_device_id
-            )
+            bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator._main_device_id)
             model = bridge_module_data.get("type") if bridge_module_data else None
-            sw_version = (
-                bridge_module_data.get("firmware_name") if bridge_module_data else None
-            )
+            sw_version = bridge_module_data.get("firmware_name") if bridge_module_data else None
 
             return DeviceInfo(
                 identifiers={(DOMAIN, self.coordinator._main_device_id)},
@@ -148,9 +123,7 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
 
         last_event = self.coordinator.data.get("last_event")
         if not last_event:
-            events = self.coordinator.data.get("events_history", {}).get(
-                self.coordinator.home_id, []
-            )
+            events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
             if events:
                 last_event = events[0]
                 _LOGGER.debug("EventSensor: Using event from history: %s", last_event)
@@ -168,14 +141,10 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
         if subevents and isinstance(subevents, list) and len(subevents) > 0:
             first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
 
-        self._attr_native_value = (
-            first_subevent.get("type") or main_type
-        )  # Prioritize subevent type
+        self._attr_native_value = first_subevent.get("type") or main_type  # Prioritize subevent type
 
         timestamp = (
-            first_subevent.get("time")
-            or last_event.get("time")
-            or last_event.get("timestamp")
+            first_subevent.get("time") or last_event.get("time") or last_event.get("timestamp")
         )  # Try multiple keys
 
         # Extract details from the first subevent if available
@@ -187,16 +156,12 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
         snapshot_data = first_subevent.get("snapshot")
         if isinstance(snapshot_data, dict):
             snapshot_url = snapshot_data.get("url")
-            snapshot_expires_at_iso = format_timestamp_iso(
-                snapshot_data.get("expires_at")
-            )
+            snapshot_expires_at_iso = format_timestamp_iso(snapshot_data.get("expires_at"))
 
         vignette_data = first_subevent.get("vignette")
         if isinstance(vignette_data, dict):
             vignette_url = vignette_data.get("url")
-            vignette_expires_at_iso = format_timestamp_iso(
-                vignette_data.get("expires_at")
-            )
+            vignette_expires_at_iso = format_timestamp_iso(vignette_data.get("expires_at"))
 
         attrs = {
             "timestamp_iso": format_timestamp_iso(timestamp),
@@ -211,26 +176,18 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
             "vignette_url": vignette_url,
             "vignette_expires_at_iso": vignette_expires_at_iso,
         }
-        self._attr_extra_state_attributes = {
-            k: v for k, v in attrs.items() if v is not None
-        }
+        self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
 
     @property
     def icon(self) -> str | None:
         """Return the icon to use in the frontend, dynamically."""
         state = self.native_value
         # Use event types defined in coordinator or constants
-        if (
-            state == "missed_call" or state == EVENT_TYPE_TERMINATED
-        ):  # Check defined const
+        if state == "missed_call" or state == EVENT_TYPE_TERMINATED:  # Check defined const
             return "mdi:phone-missed"
-        elif (
-            state == "accepted_call" or state == EVENT_TYPE_ANSWERED_ELSEWHERE
-        ):  # Check defined const
+        elif state == "accepted_call" or state == EVENT_TYPE_ANSWERED_ELSEWHERE:  # Check defined const
             return "mdi:phone-check"  # Or phone-log?
-        elif (
-            state == "incoming_call" or state == EVENT_TYPE_INCOMING_CALL
-        ):  # Check defined const
+        elif state == "incoming_call" or state == EVENT_TYPE_INCOMING_CALL:  # Check defined const
             return "mdi:phone-incoming"
         elif state == "connection":
             return "mdi:lan-connect"
@@ -242,9 +199,7 @@ class BticinoEventSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEn
         return "mdi:history"  # Default icon
 
 
-class BticinoLastCallTimestampSensor(
-    CoordinatorEntity[BticinoIntercomCoordinator], SensorEntity
-):
+class BticinoLastCallTimestampSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEntity):
     """Representation of the timestamp of the last completed BTicino call."""
 
     _attr_has_entity_name = True
@@ -265,17 +220,11 @@ class BticinoLastCallTimestampSensor(
         if self.coordinator._main_device_id:
             # Reuse the logic from BridgeBaseSensor to ensure consistency
             device_name = (
-                f"BTicino Intercom - {self.coordinator.home_name}"
-                if self.coordinator.home_name
-                else "BTicino Intercom"
+                f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
             )
-            bridge_module_data = self.coordinator.data.get("modules", {}).get(
-                self.coordinator._main_device_id
-            )
+            bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator._main_device_id)
             model = bridge_module_data.get("type") if bridge_module_data else None
-            sw_version = (
-                bridge_module_data.get("firmware_name") if bridge_module_data else None
-            )
+            sw_version = bridge_module_data.get("firmware_name") if bridge_module_data else None
 
             return DeviceInfo(
                 identifiers={(DOMAIN, self.coordinator._main_device_id)},
@@ -298,9 +247,7 @@ class BticinoLastCallTimestampSensor(
             self._attr_available = False
             return
 
-        events = self.coordinator.data.get("events_history", {}).get(
-            self.coordinator.home_id, []
-        )
+        events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
         if not events:
             self._attr_available = False  # No history to check
             self._attr_native_value = None
@@ -311,7 +258,6 @@ class BticinoLastCallTimestampSensor(
         latest_completed_call = None
         completion_timestamp = None
         for event in events:
-            event_type = event.get("type")
             subevents = event.get("subevents")
             is_relevant_call_event = False
             potential_completion_time = None
@@ -339,10 +285,7 @@ class BticinoLastCallTimestampSensor(
             self._last_call_event_data = latest_completed_call  # Store for attributes
 
             # Set native_value as datetime object
-            if (
-                isinstance(completion_timestamp, (int, float))
-                and completion_timestamp > 0
-            ):
+            if isinstance(completion_timestamp, int | float) and completion_timestamp > 0:
                 self._attr_native_value = utc_from_timestamp(completion_timestamp)
             else:
                 self._attr_native_value = None
@@ -354,9 +297,7 @@ class BticinoLastCallTimestampSensor(
             # No completed call found in history, keep previous state? Or set unavailable?
             # Let's keep previous state but mark unavailable if coordinator failed later
             # If we never found one, it should be unavailable.
-            if (
-                self._last_call_event_data is None
-            ):  # Only set unavailable if never found
+            if self._last_call_event_data is None:  # Only set unavailable if never found
                 self._attr_available = False
                 self._attr_native_value = None
                 self._attr_extra_state_attributes = {}
@@ -381,25 +322,19 @@ class BticinoLastCallTimestampSensor(
         snapshot_data = first_subevent.get("snapshot")
         if isinstance(snapshot_data, dict):
             snapshot_url = snapshot_data.get("url")
-            snapshot_expires_at_iso = format_timestamp_iso(
-                snapshot_data.get("expires_at")
-            )
+            snapshot_expires_at_iso = format_timestamp_iso(snapshot_data.get("expires_at"))
 
         vignette_data = first_subevent.get("vignette")
         if isinstance(vignette_data, dict):
             vignette_url = vignette_data.get("url")
-            vignette_expires_at_iso = format_timestamp_iso(
-                vignette_data.get("expires_at")
-            )
+            vignette_expires_at_iso = format_timestamp_iso(vignette_data.get("expires_at"))
 
         attrs = {
             "call_event_id": event.get("id"),
             "call_event_time_iso": format_timestamp_iso(event.get("time")),
             "call_module_id": event.get("module_id"),
             "subevent_type": first_subevent.get("type"),
-            "subevent_time_iso": format_timestamp_iso(
-                first_subevent.get("time")
-            ),  # Same as native_value (ISO)
+            "subevent_time_iso": format_timestamp_iso(first_subevent.get("time")),  # Same as native_value (ISO)
             "message": first_subevent.get("message"),
             "session_id": first_subevent.get("session_id"),
             "video_status": event.get("video_status"),
@@ -408,12 +343,10 @@ class BticinoLastCallTimestampSensor(
             "vignette_url": vignette_url,
             "vignette_expires_at_iso": vignette_expires_at_iso,
         }
-        self._attr_extra_state_attributes = {
-            k: v for k, v in attrs.items() if v is not None
-        }
+        self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes."""
         return getattr(self, "_attr_extra_state_attributes", {})
 
@@ -421,9 +354,7 @@ class BticinoLastCallTimestampSensor(
 # --- New Bridge Status Sensors ---
 
 
-class BticinoBridgeBaseSensor(
-    CoordinatorEntity[BticinoIntercomCoordinator], SensorEntity
-):
+class BticinoBridgeBaseSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEntity):
     """Base class for sensors attached to the bridge device."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -445,16 +376,12 @@ class BticinoBridgeBaseSensor(
         """Return device info linking to the main bridge device."""
         # All these sensors belong to the bridge device identified by bridge_id
         device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}"
-            if self.coordinator.home_name
-            else "BTicino Intercom"
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
         )
         # Extract bridge module data to potentially get model info
         # Note: We already have bridge_module_data passed in __init__, but reading fresh data might be safer?
         # Let's use the coordinator data directly here for consistency.
-        bridge_module_data = self.coordinator.data.get("modules", {}).get(
-            self._bridge_id
-        )
+        bridge_module_data = self.coordinator.data.get("modules", {}).get(self._bridge_id)
         model = bridge_module_data.get("type") if bridge_module_data else None
         sw_version = (
             bridge_module_data.get("firmware_name") if bridge_module_data else None
@@ -481,9 +408,7 @@ class BticinoBridgeBaseSensor(
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        bridge_module_data = self.coordinator.data.get("modules", {}).get(
-            self._bridge_id
-        )
+        bridge_module_data = self.coordinator.data.get("modules", {}).get(self._bridge_id)
         if bridge_module_data:
             self._update_state_from_data(bridge_module_data)
             # Availability is handled by the property, just update state
@@ -521,9 +446,7 @@ class BticinoBridgeUptimeSensor(BticinoBridgeBaseSensor):
         uptime_sec = data.get("uptime")
         self._attr_native_value = uptime_sec if isinstance(uptime_sec, int) else None
         attrs = {"uptime_readable": format_uptime_readable(uptime_sec)}
-        self._attr_extra_state_attributes = {
-            k: v for k, v in attrs.items() if v is not None
-        }
+        self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
 
 
 class BticinoBridgeWifiStrengthSensor(BticinoBridgeBaseSensor):
@@ -549,7 +472,7 @@ class BticinoBridgeWifiStrengthSensor(BticinoBridgeBaseSensor):
     def _update_state_from_data(self, data: dict[str, Any]) -> None:
         """Update state."""
         wifi_strength = data.get("wifi_strength")
-        if isinstance(wifi_strength, (int, float)):
+        if isinstance(wifi_strength, int | float):
             # RSSI should be negative. If it's positive, make it negative.
             self._attr_native_value = -abs(wifi_strength)
         else:
@@ -560,10 +483,8 @@ class BticinoBridgeWifiStrengthSensor(BticinoBridgeBaseSensor):
 class BticinoBridgeWebsocketStatusSensor(BticinoBridgeBaseSensor):
     """Representation of the Bridge WebSocket Connection Status."""
 
-    _attr_device_class = (
-        SensorDeviceClass.ENUM
-    )  # Or CONNECTIVITY? Enum seems better for True/False
-    _attr_options = ["connected", "disconnected"]  # Required for ENUM
+    _attr_device_class = SensorDeviceClass.ENUM  # Or CONNECTIVITY? Enum seems better for True/False
+    _attr_options: ClassVar[list[str]] = ["connected", "disconnected"]
     _attr_icon = "mdi:connection"
 
     def __init__(
@@ -629,7 +550,7 @@ class BticinoBridgeLastConfigUpdateSensor(BticinoBridgeBaseSensor):
     def _update_state_from_data(self, data: dict[str, Any]) -> None:
         """Update state."""
         timestamp = data.get("last_configs_update")
-        if isinstance(timestamp, (int, float)) and timestamp > 0:
+        if isinstance(timestamp, int | float) and timestamp > 0:
             self._attr_native_value = utc_from_timestamp(timestamp)
         else:
             self._attr_native_value = None
@@ -656,7 +577,7 @@ class BticinoBridgeLastSeenSensor(BticinoBridgeBaseSensor):
     def _update_state_from_data(self, data: dict[str, Any]) -> None:
         """Update state."""
         timestamp = data.get("last_seen")
-        if isinstance(timestamp, (int, float)) and timestamp > 0:
+        if isinstance(timestamp, int | float) and timestamp > 0:
             self._attr_native_value = utc_from_timestamp(timestamp)
         else:
             self._attr_native_value = None

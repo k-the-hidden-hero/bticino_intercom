@@ -1,15 +1,9 @@
 """Platform for binary sensor integration."""
 
-import asyncio
 import logging
-from typing import Any, Callable, Dict, List, Optional
-from contextlib import suppress  # Import suppress for async_will_remove_from_hass
-from datetime import datetime, timezone, timedelta  # Added datetime etc
-
-from pybticino import AsyncAccount
+from typing import Any
 
 # Unused imports removed
-
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -20,20 +14,20 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
-from homeassistant.util.dt import utc_from_timestamp  # Added
-
-# Import the actual coordinator and signal
-from .coordinator import BticinoIntercomCoordinator
 
 # Import CoordinatorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
 from .const import (
+    CALL_SENSOR_TIMEOUT,
     DOMAIN,
     SIGNAL_CALL_RECEIVED,
-    SUBTYPE_EXTERNAL_UNIT,
     SUBTYPE_DOORLOCK,
-    CALL_SENSOR_TIMEOUT,
+    SUBTYPE_EXTERNAL_UNIT,
 )  # Remove unused consts
+
+# Import the actual coordinator and signal
+from .coordinator import BticinoIntercomCoordinator
 from .utils import format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,25 +41,19 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the BTicino binary sensor platform."""
-    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id][
-        "coordinator"
-    ]
+    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     entities = []
     if coordinator.data and "modules" in coordinator.data:
-        _LOGGER.debug(
-            f"Binary Sensor Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
-        )
+        _LOGGER.debug("Binary Sensor Setup: Found %d modules in coordinator data.", len(coordinator.data["modules"]))
         for module_id, module_data in coordinator.data["modules"].items():
             variant = module_data.get("variant")
             subtype = None
-            _LOGGER.debug(
-                f"Binary Sensor Setup: Checking module {module_id}, Variant: {variant}"
-            )
+            _LOGGER.debug("Binary Sensor Setup: Checking module %s, Variant: %s", module_id, variant)
             if variant and ":" in variant:
                 try:
                     subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug(f"Binary Sensor Setup: Extracted subtype: {subtype}")
+                    _LOGGER.debug("Binary Sensor Setup: Extracted subtype: %s", subtype)
                 except IndexError:
                     _LOGGER.warning(
                         "Could not parse subtype from variant '%s' for module %s",
@@ -75,17 +63,19 @@ async def async_setup_entry(
                     subtype = None
 
             if subtype == SUBTYPE_EXTERNAL_UNIT:
-                _LOGGER.debug(
-                    "Found external unit module (via variant subtype): %s", module_id
-                )
+                _LOGGER.debug("Found external unit module (via variant subtype): %s", module_id)
                 entities.append(BticinoCallBinarySensor(coordinator, module_id))
             elif subtype:
                 _LOGGER.debug(
-                    f"Binary Sensor Setup: Module {module_id} subtype '{subtype}' did not match expected external unit subtype."
+                    "Binary Sensor Setup: Module %s subtype '%s' did not match expected external unit subtype.",
+                    module_id,
+                    subtype,
                 )
             elif not subtype and variant is not None:
                 _LOGGER.debug(
-                    f"Binary Sensor Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
+                    "Binary Sensor Setup: Module %s has variant '%s' but failed to extract subtype.",
+                    module_id,
+                    variant,
                 )
 
     if not entities:
@@ -94,9 +84,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BticinoCallBinarySensor(
-    CoordinatorEntity[BticinoIntercomCoordinator], BinarySensorEntity
-):
+class BticinoCallBinarySensor(CoordinatorEntity[BticinoIntercomCoordinator], BinarySensorEntity):
     """Representation of a BTicino call sensor."""
 
     _attr_device_class = BinarySensorDeviceClass.OCCUPANCY  # Or SOUND?
@@ -114,13 +102,11 @@ class BticinoCallBinarySensor(
 
         # Initialize bridge_id and associated_lock_ids early
         self._bridge_id = module_data.get("bridge")
-        self._associated_lock_ids: List[str] = []
-        found_locks_data: List[Dict[str, Any]] = []  # Store lock data for name check
+        self._associated_lock_ids: list[str] = []
+        found_locks_data: list[dict[str, Any]] = []  # Store lock data for name check
 
         if self._bridge_id:
-            for other_module_id, other_module_data in coordinator.data.get(
-                "modules", {}
-            ).items():
+            for other_module_id, other_module_data in coordinator.data.get("modules", {}).items():
                 other_variant = other_module_data.get("variant")
                 other_subtype = None
                 if other_variant and ":" in other_variant:
@@ -129,21 +115,15 @@ class BticinoCallBinarySensor(
                     except IndexError:
                         other_subtype = None
 
-                if (
-                    other_module_data.get("bridge") == self._bridge_id
-                    and other_subtype == SUBTYPE_DOORLOCK
-                ):
+                if other_module_data.get("bridge") == self._bridge_id and other_subtype == SUBTYPE_DOORLOCK:
                     self._associated_lock_ids.append(other_module_id)
                     found_locks_data.append(other_module_data)  # Store lock data
 
         # If module name is missing or seems generic (like the ID), try lock name
-        if not entity_name or entity_name == module_id:
-            if len(found_locks_data) == 1:
-                lock_name = found_locks_data[0].get("name")
-                if lock_name and lock_name != found_locks_data[0].get(
-                    "id"
-                ):  # Check if lock name is valid
-                    entity_name = lock_name  # Use the lock's name
+        if (not entity_name or entity_name == module_id) and len(found_locks_data) == 1:
+            lock_name = found_locks_data[0].get("name")
+            if lock_name and lock_name != found_locks_data[0].get("id"):
+                entity_name = lock_name
 
         # If still no valid name, default to "Call"
         if not entity_name or entity_name == module_id:
@@ -158,9 +138,7 @@ class BticinoCallBinarySensor(
     def device_info(self) -> DeviceInfo:
         """Return device info."""
         device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}"
-            if self.coordinator.home_name
-            else "BTicino Intercom"
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
         )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
@@ -188,9 +166,7 @@ class BticinoCallBinarySensor(
             return False
 
         # Access events history correctly
-        events = self.coordinator.data.get("events_history", {}).get(
-            self.coordinator.home_id, []
-        )
+        events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
         if not events:
             return False
 
@@ -202,7 +178,7 @@ class BticinoCallBinarySensor(
         )
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes."""
         # Ensure attributes are updated before returning
         # Note: This relies on the coordinator update running first
@@ -246,16 +222,11 @@ class BticinoCallBinarySensor(
 
         # Find the latest call event specific to this module and add its details
         # Access events history correctly
-        events = self.coordinator.data.get("events_history", {}).get(
-            self.coordinator.home_id, []
-        )
+        events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
         latest_call_event = None
         if events:
             for event in events:
-                if (
-                    event.get("type") == "call"
-                    and event.get("module_id") == self._module_id
-                ):
+                if event.get("type") == "call" and event.get("module_id") == self._module_id:
                     latest_call_event = event
                     break
 
@@ -295,19 +266,13 @@ class BticinoCallBinarySensor(
                     "vignette_expires_at": vignette_expires_at,
                     "call_start_iso": format_timestamp_iso(call_start_ts),
                     "call_end_iso": format_timestamp_iso(call_end_ts),
-                    "snapshot_expires_at_iso": format_timestamp_iso(
-                        snapshot_expires_at
-                    ),
-                    "vignette_expires_at_iso": format_timestamp_iso(
-                        vignette_expires_at
-                    ),
+                    "snapshot_expires_at_iso": format_timestamp_iso(snapshot_expires_at),
+                    "vignette_expires_at_iso": format_timestamp_iso(vignette_expires_at),
                 }
             )
 
         # Filter out None values and update the attribute
-        self._attr_extra_state_attributes = {
-            k: v for k, v in attrs.items() if v is not None
-        }
+        self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
 
         # State (is_on) is handled by dispatcher/timer, not directly by coordinator update
 
@@ -321,24 +286,18 @@ class BticinoCallBinarySensor(
     def _handle_call_received(self, state: bool, module_id: str | None) -> None:
         """Handle the dispatcher signal for incoming calls."""
         if module_id == self._module_id:
-            _LOGGER.debug(
-                "Handling call signal for %s: state=%s", self.entity_id, state
-            )
+            _LOGGER.debug("Handling call signal for %s: state=%s", self.entity_id, state)
             self._attr_is_on = state
             self.async_write_ha_state()
 
             if hasattr(self, "_turn_off_canceller") and self._turn_off_canceller:
-                _LOGGER.debug(
-                    "Cancelling previous turn-off timer for %s", self.entity_id
-                )
+                _LOGGER.debug("Cancelling previous turn-off timer for %s", self.entity_id)
                 self._turn_off_canceller()
                 self._turn_off_canceller = None
 
             if state:
                 _LOGGER.debug("Setting turn-off timer for %s", self.entity_id)
-                self._turn_off_canceller = async_call_later(
-                    self.hass, CALL_SENSOR_TIMEOUT, self._turn_off_callback
-                )
+                self._turn_off_canceller = async_call_later(self.hass, CALL_SENSOR_TIMEOUT, self._turn_off_callback)
         else:
             _LOGGER.debug(
                 "Ignoring call signal for module %s on sensor %s",
@@ -358,18 +317,12 @@ class BticinoCallBinarySensor(
         """Register callbacks when entity is added."""
         await super().async_added_to_hass()
 
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass, SIGNAL_CALL_RECEIVED, self._handle_call_received
-            )
-        )
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CALL_RECEIVED, self._handle_call_received))
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
-        if hasattr(self, "_turn_off_canceller")  and self._turn_off_canceller:
-            _LOGGER.debug(
-                "Cancelling turn-off timer for %s during removal", self.entity_id
-            )
+        if hasattr(self, "_turn_off_canceller") and self._turn_off_canceller:
+            _LOGGER.debug("Cancelling turn-off timer for %s during removal", self.entity_id)
             self._turn_off_canceller()
             self._turn_off_canceller = None
         await super().async_will_remove_from_hass()

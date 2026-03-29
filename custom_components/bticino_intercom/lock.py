@@ -1,26 +1,22 @@
 """Platform for lock integration."""
 
 import logging
-from typing import Any, Dict, Optional, Callable
-import asyncio
-from datetime import datetime, timezone, timedelta
+from collections.abc import Callable
+from typing import Any
 
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.event import async_call_later
-from homeassistant.util.dt import utc_from_timestamp
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
     LOCK_RELOCK_DELAY,
     SUBTYPE_DOORLOCK,
     SUBTYPE_STAIRCASE_LIGHT,
-    SUBTYPE_TO_PLATFORM,
-    Platform,
 )
 from .coordinator import BticinoIntercomCoordinator
 from .utils import format_timestamp_iso, format_uptime_readable
@@ -34,27 +30,21 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up BTicino locks based on config entry."""
-    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id][
-        "coordinator"
-    ]
+    coordinator: BticinoIntercomCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     # Get the configuration option
     light_as_lock = entry.options.get("light_as_lock", False)
 
     entities = []
     if coordinator.data and "modules" in coordinator.data:
-        _LOGGER.debug(
-            f"Lock Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
-        )
+        _LOGGER.debug("Lock Setup: Found %d modules in coordinator data.", len(coordinator.data["modules"]))
         for module_id, module_data in coordinator.data["modules"].items():
             variant = module_data.get("variant")
             subtype = None
-            _LOGGER.debug(
-                f"Lock Setup: Checking module {module_id}, Variant: {variant}"
-            )
+            _LOGGER.debug("Lock Setup: Checking module %s, Variant: %s", module_id, variant)
             if variant and ":" in variant:
                 try:
                     subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug(f"Lock Setup: Extracted subtype: {subtype}")
+                    _LOGGER.debug("Lock Setup: Extracted subtype: %s", subtype)
                 except IndexError:
                     _LOGGER.warning(
                         "Could not parse subtype from variant '%s' for module %s",
@@ -82,20 +72,20 @@ async def async_setup_entry(
                 )
             elif subtype:
                 _LOGGER.debug(
-                    f"Lock Setup: Module {module_id} subtype '{subtype}' did not match expected lock/light subtypes."
+                    "Lock Setup: Module %s subtype '%s' did not match expected lock/light subtypes.",
+                    module_id,
+                    subtype,
                 )
             # Optionally, log modules with unknown/missing variants if needed for debugging
             elif not subtype and variant is not None:
                 _LOGGER.debug(
-                    f"Lock Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
+                    "Lock Setup: Module %s has variant '%s' but failed to extract subtype.", module_id, variant
                 )
             # else: # subtype is None and variant is None
             #     _LOGGER.debug(f"Lock Setup: Module {module_id} has no variant field.") # Potentially too verbose
 
     if not entities:
-        _LOGGER.debug(
-            "No BTicino lock modules found or configured to be represented as lock"
-        )
+        _LOGGER.debug("No BTicino lock modules found or configured to be represented as lock")
 
     async_add_entities(entities)
 
@@ -123,9 +113,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
         """Return device info."""
         # Use coordinator.home_name for the device name if available
         device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}"
-            if self.coordinator.home_name
-            else "BTicino Intercom"
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
         )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
@@ -200,9 +188,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
         self.async_write_ha_state()  # Logbook entry!
 
         # Set timer to automatically relock state
-        self._relock_canceller = async_call_later(
-            self.hass, LOCK_RELOCK_DELAY, self._relock_callback
-        )
+        self._relock_canceller = async_call_later(self.hass, LOCK_RELOCK_DELAY, self._relock_callback)
 
         # Send command to API
         try:
@@ -263,9 +249,7 @@ class BticinoLock(CoordinatorEntity, LockEntity):
         """Handle updated data from the coordinator."""
         # Update internal state only if not optimistically unlocked
         if self._relock_canceller is None:
-            module_data = self.coordinator.data.get("modules", {}).get(
-                self._module_id, {}
-            )
+            module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
             self._attr_is_locked = bool(module_data.get("lock", True))
 
         # Let HA know state + attributes might have changed
@@ -307,18 +291,14 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
         # Lock state is inverse of light state (light on = unlocked, light off = locked)
         self._attr_is_locked = not bool(module_data.get("status") == "on")
         self._bridge_id = module_data.get("bridge")
-        self._relock_canceller: Callable[[], None] | None = (
-            None  # Ensure Callable is imported if not already
-        )
+        self._relock_canceller: Callable[[], None] | None = None  # Ensure Callable is imported if not already
 
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info."""
         # Associate with the same device as the coordinator
         device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}"
-            if self.coordinator.home_name
-            else "BTicino Intercom"
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
         )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
@@ -403,9 +383,7 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
             )
 
             # Set auto-relock timer
-            self._relock_canceller = async_call_later(
-                self.hass, LOCK_RELOCK_DELAY, self._relock_callback
-            )
+            self._relock_canceller = async_call_later(self.hass, LOCK_RELOCK_DELAY, self._relock_callback)
 
         except Exception as err:
             _LOGGER.error("Failed to unlock %s: %s", self.entity_id, err)
@@ -452,9 +430,7 @@ class BticinoLightAsLock(CoordinatorEntity, LockEntity):
         """Handle updated data from the coordinator."""
         # Update internal state only if not optimistically unlocked
         if self._relock_canceller is None:
-            module_data = self.coordinator.data.get("modules", {}).get(
-                self._module_id, {}
-            )
+            module_data = self.coordinator.data.get("modules", {}).get(self._module_id, {})
             # Light on = unlocked, Light off = locked
             new_state_locked = not bool(module_data.get("status") == "on")
             if self._attr_is_locked != new_state_locked:

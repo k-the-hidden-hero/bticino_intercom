@@ -4,20 +4,19 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from pybticino import AuthHandler
-from pybticino.exceptions import AuthError, ApiError
-
 from homeassistant import config_entries
 from homeassistant.const import (
-    CONF_USERNAME,
     CONF_PASSWORD,
     # CONF_CLIENT_ID, # Removed
     # CONF_CLIENT_SECRET, # Removed
+    CONF_USERNAME,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers import config_validation as cv, selector
+from pybticino import AsyncAccount, AuthHandler
+from pybticino.exceptions import ApiError, AuthError
 
 from .const import DOMAIN
 
@@ -36,9 +35,6 @@ STEP_INIT_OPTIONS_SCHEMA = vol.Schema(
         vol.Optional("light_as_lock", default=False): selector.BooleanSelector(),
     }
 )
-
-# Import AsyncAccount needed for topology fetch
-from pybticino import AsyncAccount
 
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> AuthHandler:
@@ -59,9 +55,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> AuthHandl
 class BticinoOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle BTicino options."""
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
             # Merge new options with existing ones, keeping existing if not provided
@@ -90,10 +84,9 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
-    # Store data between steps
-    _config_data: dict[str, Any] = {}  # Store config data (user/pass/home_id)
-    _config_title: str = ""  # Store title
-    _homes_data: dict[str, Any] | None = None
+    _config_data: dict[str, Any]
+    _config_title: str
+    _homes_data: dict[str, Any] | None
 
     # Add static method to get options flow
     @staticmethod
@@ -104,10 +97,13 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Get the options flow for this handler."""
         return BticinoOptionsFlowHandler(config_entry)
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
+        if not hasattr(self, "_config_data") or not self._config_data:
+            self._config_data = {}
+            self._config_title = ""
+            self._homes_data = None
+
         errors: dict[str, str] = {}
         if user_input is not None:
             # Prevent duplicate entries for the same username
@@ -129,7 +125,7 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Catch API errors during validation or topology fetch
                 _LOGGER.error("API Error during setup: %s", err)
                 errors["base"] = "cannot_connect"
-            except Exception as err:  # pylint: disable=broad-except
+            except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during setup")
                 errors["base"] = "unknown"
 
@@ -144,8 +140,8 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_abort(reason="no_homes_found")
                 elif len(account.homes) == 1:
                     # Only one home, store details and move to options step
-                    home_id = list(account.homes.keys())[0]
-                    home_name = list(account.homes.values())[0].name
+                    home_id = next(iter(account.homes.keys()))
+                    home_name = next(iter(account.homes.values())).name
                     self._config_data["home_id"] = home_id
                     self._config_title = home_name or user_input[CONF_USERNAME]
                     # Proceed to options step
@@ -169,13 +165,9 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await auth_handler.close_session()
 
         # Show the initial form again if user_input is None or errors occurred
-        return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
-        )
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors)
 
-    async def async_step_select_home(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_select_home(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the home selection step."""
         errors: dict[str, str] = {}
 
@@ -192,21 +184,14 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Prepare the list for the dropdown
         homes_selection = {
-            home_id: f"{data['name']} ({data['module_count']} modules)"
-            for home_id, data in self._homes_data.items()
+            home_id: f"{data['name']} ({data['module_count']} modules)" for home_id, data in self._homes_data.items()
         }
 
-        select_home_schema = vol.Schema(
-            {vol.Required("home_id"): vol.In(homes_selection)}
-        )
+        select_home_schema = vol.Schema({vol.Required("home_id"): vol.In(homes_selection)})
 
-        return self.async_show_form(
-            step_id="select_home", data_schema=select_home_schema, errors=errors
-        )
+        return self.async_show_form(step_id="select_home", data_schema=select_home_schema, errors=errors)
 
-    async def async_step_init_options(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_init_options(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial options step (e.g., light_as_lock)."""
         errors: dict[str, str] = {}
 
@@ -216,14 +201,10 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             options_data = {
                 "light_as_lock": user_input.get("light_as_lock", False),
             }
-            return self.async_create_entry(
-                title=self._config_title, data=self._config_data, options=options_data
-            )
+            return self.async_create_entry(title=self._config_title, data=self._config_data, options=options_data)
 
         # Show the options form
-        return self.async_show_form(
-            step_id="init_options", data_schema=STEP_INIT_OPTIONS_SCHEMA, errors=errors
-        )
+        return self.async_show_form(step_id="init_options", data_schema=STEP_INIT_OPTIONS_SCHEMA, errors=errors)
 
 
 # Optional: Add support for reauthentication if tokens expire

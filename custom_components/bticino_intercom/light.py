@@ -1,22 +1,17 @@
 """Platform for light integration."""
 
 import logging
-from typing import Any, Dict, Optional
-from datetime import datetime, timezone, timedelta
+from typing import Any, ClassVar
 
-from homeassistant.components.light import LightEntity, ColorMode
-from homeassistant.components.lock import LockEntity, LockEntityFeature
+from homeassistant.components.light import ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.event import async_call_later
-from homeassistant.util.dt import utc_from_timestamp
 
 from .const import (
     DOMAIN,
-    LOCK_RELOCK_DELAY,
     SUBTYPE_STAIRCASE_LIGHT,
 )
 from .coordinator import BticinoIntercomCoordinator
@@ -38,19 +33,15 @@ async def async_setup_entry(
 
     entities = []
     if coordinator.data and "modules" in coordinator.data:
-        _LOGGER.debug(
-            f"Light Setup: Found {len(coordinator.data['modules'])} modules in coordinator data."
-        )
+        _LOGGER.debug("Light Setup: Found %d modules in coordinator data.", len(coordinator.data["modules"]))
         for module_id, module_data in coordinator.data["modules"].items():
             variant = module_data.get("variant")
             subtype = None
-            _LOGGER.debug(
-                f"Light Setup: Checking module {module_id}, Variant: {variant}"
-            )
+            _LOGGER.debug("Light Setup: Checking module %s, Variant: %s", module_id, variant)
             if variant and ":" in variant:
                 try:
                     subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug(f"Light Setup: Extracted subtype: {subtype}")
+                    _LOGGER.debug("Light Setup: Extracted subtype: %s", subtype)
                 except IndexError:
                     _LOGGER.warning(
                         "Could not parse subtype from variant '%s' for module %s",
@@ -73,18 +64,16 @@ async def async_setup_entry(
                 )
             elif subtype:
                 _LOGGER.debug(
-                    f"Light Setup: Module {module_id} subtype '{subtype}' did not match expected light subtype."
+                    "Light Setup: Module %s subtype '%s' did not match expected light subtype.", module_id, subtype
                 )
             # Optionally log other subtypes or missing variants
             elif not subtype and variant is not None:
                 _LOGGER.debug(
-                    f"Light Setup: Module {module_id} has variant '{variant}' but failed to extract subtype."
+                    "Light Setup: Module %s has variant '%s' but failed to extract subtype.", module_id, variant
                 )
 
     if not entities:
-        _LOGGER.debug(
-            "No BTicino light modules found or configured to be represented as light"
-        )
+        _LOGGER.debug("No BTicino light modules found or configured to be represented as light")
 
     async_add_entities(entities)
 
@@ -94,7 +83,7 @@ class BticinoLight(CoordinatorEntity, LightEntity):
 
     _attr_has_entity_name = True
     _attr_icon = "mdi:light-recessed"
-    _attr_supported_color_modes = {ColorMode.ONOFF}
+    _attr_supported_color_modes: ClassVar[set[ColorMode]] = {ColorMode.ONOFF}
     _attr_color_mode = ColorMode.ONOFF
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
@@ -112,9 +101,7 @@ class BticinoLight(CoordinatorEntity, LightEntity):
     def device_info(self) -> DeviceInfo:
         """Return device info."""
         device_name = (
-            f"BTicino Intercom - {self.coordinator.home_name}"
-            if self.coordinator.home_name
-            else "BTicino Intercom"
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
         )
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator._main_device_id)},
