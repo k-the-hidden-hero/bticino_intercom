@@ -85,7 +85,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the call sensor."""
         super().__init__(coordinator, module_id)
-        self._attr_unique_id = f"{module_id}_call"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_call_{module_id}"
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
         entity_name = module_data.get("name")
 

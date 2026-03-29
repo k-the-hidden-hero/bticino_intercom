@@ -437,7 +437,7 @@ class BticinoBridgeUptimeSensor(BticinoBridgeBaseSensor):
         bridge_module_data: dict[str, Any],
     ) -> None:
         """Initialize the uptime sensor."""
-        self._attr_unique_id = f"{bridge_id}_uptime"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_uptime"
         self._attr_name = "Bridge Uptime"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
@@ -465,7 +465,7 @@ class BticinoBridgeWifiStrengthSensor(BticinoBridgeBaseSensor):
         bridge_module_data: dict[str, Any],
     ) -> None:
         """Initialize the wifi strength sensor."""
-        self._attr_unique_id = f"{bridge_id}_wifi_strength"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_wifi_strength"
         self._attr_name = "Bridge WiFi Strength"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
@@ -494,7 +494,7 @@ class BticinoBridgeWebsocketStatusSensor(BticinoBridgeBaseSensor):
         bridge_module_data: dict[str, Any],
     ) -> None:
         """Initialize the websocket status sensor."""
-        self._attr_unique_id = f"{bridge_id}_websocket_status"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_websocket_status"
         self._attr_name = "Bridge WebSocket Status"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
@@ -520,7 +520,7 @@ class BticinoBridgeLocalIpSensor(BticinoBridgeBaseSensor):
         bridge_module_data: dict[str, Any],
     ) -> None:
         """Initialize the IP address sensor."""
-        self._attr_unique_id = f"{bridge_id}_local_ip"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_local_ip"
         self._attr_name = "Bridge Local IP Address"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
@@ -543,7 +543,7 @@ class BticinoBridgeLastConfigUpdateSensor(BticinoBridgeBaseSensor):
         bridge_module_data: dict[str, Any],
     ) -> None:
         """Initialize the last config update sensor."""
-        self._attr_unique_id = f"{bridge_id}_last_config_update"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_last_config_update"
         self._attr_name = "Bridge Last Config Update"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
@@ -570,7 +570,7 @@ class BticinoBridgeLastSeenSensor(BticinoBridgeBaseSensor):
         bridge_module_data: dict[str, Any],
     ) -> None:
         """Initialize the last seen sensor."""
-        self._attr_unique_id = f"{bridge_id}_last_seen"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_last_seen"
         self._attr_name = "Bridge Last Seen"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
