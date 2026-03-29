@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main, revamp]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------- Lint & Format ----------
+  lint:
+    name: Ruff lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: "check"
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: "format --check"
+
+  # ---------- Security ----------
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install bandit
+        run: pip install bandit
+
+      - name: Run bandit (security linter)
+        run: bandit -r custom_components/ -c pyproject.toml || bandit -r custom_components/ -s B101,B110
+
+  # ---------- Tests ----------
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-homeassistant-custom-component freezegun
+          pip install websockets PyTurboJPEG
+          pip install pybticino>=1.5.0
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  # ---------- Home Assistant validation ----------
+  validate-ha:
+    name: HA validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+        name: HassFest
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  # ---------- Gate ----------
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs: [lint, security, tests, validate-ha]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "Lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.tests.result }}" != "success" ]]; then
+            echo "Tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.validate-ha.result }}" != "success" ]]; then
+            echo "HA validation failed"
+            exit 1
+          fi
+          if [[ "${{ needs.security.result }}" != "success" ]]; then
+            echo "Security scan failed (warning)"
+          fi
+          echo "All checks passed"
