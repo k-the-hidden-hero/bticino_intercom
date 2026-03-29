@@ -316,8 +316,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                             current_module_data.get(key),
                             value,
                         )
-                    current_module_data[key] = value
-                    module_updated = True
+                        current_module_data[key] = value
+                        module_updated = True
 
         if module_updated:
             updated = True
