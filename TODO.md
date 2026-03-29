@@ -77,6 +77,19 @@ Roadmap delle funzionalita da implementare, ordinate per priorita e complessita.
 
 ## Funzionalita nuove — Priorita bassa
 
+### Replay video registrati (VOD via WebRTC)
+- [ ] L'app supporta VOD: invia un offer con `session_description.type: "vod"` e `video_id`
+- [ ] Permette di rivedere le registrazioni degli eventi (chiamate, movimenti)
+- [ ] Il Classe 100X **non** ha server HLS locale (nmap confermato: tutte le porte filtrate)
+- [ ] Il video registrato passa comunque via WebRTC cloud (signaling a `wss://app.netatmo.net/appws/`)
+- [ ] Comandi player supportati: `{"action":"rtc","data":{"type":"player","value":"<cmd>"}}`
+- [ ] Esporre come media_player o come camera con timeline
+
+### Refresh snapshot/vignette URL scaduti
+- [ ] L'app usa l'endpoint `/api/refreshbloburl` per rinnovare URL Azure scaduti
+- [ ] Implementare in pybticino e usare nel camera entity quando l'URL e' scaduto
+- [ ] Evita che le camera diventino unavailable dopo la scadenza del SAS token
+
 ### Storico chiamate come calendario
 - [ ] Esporre gli eventi storici come entita `calendar`
 - [ ] Ogni chiamata diventa un evento nel calendario con orario, durata, tipo, snapshot
