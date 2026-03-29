@@ -1,5 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
 custom_components/bticino_intercom/__pycache__
 .clinerules/home-assistant-developers.home-assistant.md
 logs
 home-assistant.log
 example_payload.json
+REVAMP.md
+bticino_intercom.egg-info/

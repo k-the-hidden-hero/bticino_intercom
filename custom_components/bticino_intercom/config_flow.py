@@ -84,7 +84,11 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> BticinoOptionsFlowHandler:
         """Get the options flow for this handler."""
-        return BticinoOptionsFlowHandler(config_entry)
+        return BticinoOptionsFlowHandler()
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Handle reauth when credentials expire."""
+        return self.async_abort(reason="reauth_not_supported")
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""

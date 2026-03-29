@@ -1,10 +1,10 @@
 [project]
 name = "bticino_intercom"
 version = "1.7.3"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]
@@ -28,6 +28,18 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["custom_components.bticino_intercom"]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-homeassistant-custom-component",
+    "freezegun",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]  # assert is fine in HA integrations
