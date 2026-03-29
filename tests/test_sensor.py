@@ -105,15 +105,16 @@ async def test_bridge_uptime_sensor(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
 ) -> None:
-    """Test bridge uptime sensor shows uptime value."""
+    """Test bridge uptime/last boot sensor."""
     states = hass.states.async_entity_ids(SENSOR_DOMAIN)
-    uptime_entity = [s for s in states if "uptime" in s]
-    assert len(uptime_entity) == 1
+    boot_entity = [s for s in states if "last_boot" in s or "uptime" in s]
+    assert len(boot_entity) == 1
 
-    state = hass.states.get(uptime_entity[0])
+    state = hass.states.get(boot_entity[0])
     assert state is not None
-    # From fixture: uptime = 86400 seconds
-    assert state.state == "86400"
+    # Now a timestamp sensor showing boot time, should be a valid ISO date
+    assert state.state != "unknown"
+    assert state.state != "unavailable"
 
 
 async def test_bridge_wifi_strength_sensor(

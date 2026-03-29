@@ -1,6 +1,7 @@
 """Platform for sensor integration."""
 
 import logging
+from datetime import timedelta
 from typing import Any, ClassVar
 
 from homeassistant.components.sensor import (
@@ -9,12 +10,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import SIGNAL_STRENGTH_DECIBELS_MILLIWATT, UnitOfTime
+from homeassistant.const import SIGNAL_STRENGTH_DECIBELS_MILLIWATT
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util.dt import utc_from_timestamp
+from homeassistant.util.dt import utc_from_timestamp, utcnow
 
 from .const import (
     DOMAIN,
@@ -418,11 +419,9 @@ class BticinoBridgeBaseSensor(CoordinatorEntity[BticinoIntercomCoordinator], Sen
 
 
 class BticinoBridgeUptimeSensor(BticinoBridgeBaseSensor):
-    """Representation of the Bridge Uptime."""
+    """Representation of the Bridge Uptime as a timestamp (boot time)."""
 
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:timer-sand"
 
     def __init__(
@@ -433,13 +432,17 @@ class BticinoBridgeUptimeSensor(BticinoBridgeBaseSensor):
     ) -> None:
         """Initialize the uptime sensor."""
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_uptime"
-        self._attr_name = "Bridge Uptime"
+        self._attr_name = "Bridge Last Boot"
         super().__init__(coordinator, bridge_id, bridge_module_data)
 
     def _update_state_from_data(self, data: dict[str, Any]) -> None:
-        """Update state and attributes."""
+        """Update state — convert uptime seconds to a boot timestamp."""
         uptime_sec = data.get("uptime")
-        self._attr_native_value = uptime_sec if isinstance(uptime_sec, int) else None
+        if isinstance(uptime_sec, int) and uptime_sec > 0:
+            boot_time = utcnow() - timedelta(seconds=uptime_sec)
+            self._attr_native_value = boot_time
+        else:
+            self._attr_native_value = None
         attrs = {"uptime_readable": format_uptime_readable(uptime_sec)}
         self._attr_extra_state_attributes = {k: v for k, v in attrs.items() if v is not None}
 

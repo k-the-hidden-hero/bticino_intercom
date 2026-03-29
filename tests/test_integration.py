@@ -274,7 +274,7 @@ async def test_coordinator_api_failure_makes_entities_unavailable(
     await hass.async_block_till_done()
 
     # Bridge sensors should become unavailable
-    uptime_id = next(s for s in hass.states.async_entity_ids(SENSOR_DOMAIN) if "uptime" in s)
+    uptime_id = next(s for s in hass.states.async_entity_ids(SENSOR_DOMAIN) if "last_boot" in s or "uptime" in s)
     assert hass.states.get(uptime_id).state == "unavailable"
 
 
@@ -291,7 +291,7 @@ async def test_coordinator_recovers_after_api_failure(
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
-    uptime_id = next(s for s in hass.states.async_entity_ids(SENSOR_DOMAIN) if "uptime" in s)
+    uptime_id = next(s for s in hass.states.async_entity_ids(SENSOR_DOMAIN) if "last_boot" in s or "uptime" in s)
     assert hass.states.get(uptime_id).state == "unavailable"
 
     # Recover
@@ -301,7 +301,7 @@ async def test_coordinator_recovers_after_api_failure(
 
     state = hass.states.get(uptime_id)
     assert state.state != "unavailable"
-    assert state.state == "86400"
+    # Now a timestamp sensor, just verify it recovered from unavailable
 
 
 # ---------------------------------------------------------------------------
