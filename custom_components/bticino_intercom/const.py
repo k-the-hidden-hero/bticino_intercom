@@ -9,6 +9,7 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.SENSOR,
     Platform.LIGHT,
+    Platform.CAMERA,
 ]
 
 # Configuration constants
