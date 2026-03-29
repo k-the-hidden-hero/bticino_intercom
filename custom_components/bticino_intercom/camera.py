@@ -107,37 +107,13 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+        old_url = self._image_url
         self._update_state()
-        # Clear cache if the underlying image URL changed
-        # (We check the URL itself, not just the timestamp, in case the same event
-        # somehow gets processed twice but with a new URL)
-        # We need to get the NEW url from the coordinator state update first
-        new_url = self._get_image_url_from_coordinator()
-        if new_url != self._image_url:
+        if self._image_url != old_url:
             _LOGGER.debug("Image URL changed for %s, clearing cache.", self.entity_id)
             self._cached_image = None
             self._cached_image_time = None
-            # Update internal state with new URL etc AFTER clearing cache
-            self._update_state_internal()
-
         self.async_write_ha_state()
-
-    def _get_image_url_from_coordinator(self) -> str | None:
-        """Helper to extract the correct image URL from coordinator data."""
-        image_url = None
-        last_event = self.coordinator.data.get("last_event")
-        if not last_event:
-            events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
-            last_event = events[0] if events else None
-
-        if last_event:
-            subevents = last_event.get("subevents")
-            if subevents and isinstance(subevents, list) and len(subevents) > 0:
-                first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
-                image_data = first_subevent.get(self._image_type)  # 'snapshot' or 'vignette'
-                if isinstance(image_data, dict):
-                    image_url = image_data.get("url")
-        return image_url
 
     def _update_state_internal(self) -> None:
         """Update internal state variables from coordinator data."""
