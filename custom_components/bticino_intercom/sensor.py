@@ -58,11 +58,6 @@ async def async_setup_entry(
         entities.append(BticinoBridgeWifiStrengthSensor(coordinator, bridge_id, bridge_module_data))
         entities.append(BticinoBridgeWebsocketStatusSensor(coordinator, bridge_id, bridge_module_data))
         entities.append(BticinoBridgeLocalIpSensor(coordinator, bridge_id, bridge_module_data))
-        entities.append(BticinoBridgeLastConfigUpdateSensor(coordinator, bridge_id, bridge_module_data))
-        if bridge_module_data.get("last_seen", 0) > 0:
-            entities.append(BticinoBridgeLastSeenSensor(coordinator, bridge_id, bridge_module_data))
-        else:
-            _LOGGER.debug("Skipping Last Seen sensor, timestamp is 0.")
     else:
         _LOGGER.warning(
             "Bridge module data not found for ID %s, skipping bridge-specific sensors.",
@@ -527,58 +522,4 @@ class BticinoBridgeLocalIpSensor(BticinoBridgeBaseSensor):
     def _update_state_from_data(self, data: dict[str, Any]) -> None:
         """Update state."""
         self._attr_native_value = data.get("local_ipv4")
-        self._attr_extra_state_attributes = {}
-
-
-class BticinoBridgeLastConfigUpdateSensor(BticinoBridgeBaseSensor):
-    """Representation of the Bridge Last Config Update Timestamp."""
-
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_icon = "mdi:update"
-
-    def __init__(
-        self,
-        coordinator: BticinoIntercomCoordinator,
-        bridge_id: str,
-        bridge_module_data: dict[str, Any],
-    ) -> None:
-        """Initialize the last config update sensor."""
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_last_config_update"
-        self._attr_name = "Bridge Last Config Update"
-        super().__init__(coordinator, bridge_id, bridge_module_data)
-
-    def _update_state_from_data(self, data: dict[str, Any]) -> None:
-        """Update state."""
-        timestamp = data.get("last_configs_update")
-        if isinstance(timestamp, int | float) and timestamp > 0:
-            self._attr_native_value = utc_from_timestamp(timestamp)
-        else:
-            self._attr_native_value = None
-        self._attr_extra_state_attributes = {}
-
-
-class BticinoBridgeLastSeenSensor(BticinoBridgeBaseSensor):
-    """Representation of the Bridge Last Seen Timestamp."""
-
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_icon = "mdi:eye-check-outline"
-
-    def __init__(
-        self,
-        coordinator: BticinoIntercomCoordinator,
-        bridge_id: str,
-        bridge_module_data: dict[str, Any],
-    ) -> None:
-        """Initialize the last seen sensor."""
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{bridge_id}_last_seen"
-        self._attr_name = "Bridge Last Seen"
-        super().__init__(coordinator, bridge_id, bridge_module_data)
-
-    def _update_state_from_data(self, data: dict[str, Any]) -> None:
-        """Update state."""
-        timestamp = data.get("last_seen")
-        if isinstance(timestamp, int | float) and timestamp > 0:
-            self._attr_native_value = utc_from_timestamp(timestamp)
-        else:
-            self._attr_native_value = None
         self._attr_extra_state_attributes = {}

@@ -10,8 +10,10 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CALL_SENSOR_TIMEOUT,
@@ -70,8 +72,12 @@ async def async_setup_entry(
                     variant,
                 )
 
+    # Add bridge "busy" sensor if bridge is available
+    if coordinator.main_device_id:
+        entities.append(BticinoBridgeBusySensor(coordinator))
+
     if not entities:
-        _LOGGER.debug("No BTicino external unit modules found")
+        _LOGGER.debug("No BTicino binary sensor modules found")
 
     async_add_entities(entities)
 
@@ -281,3 +287,47 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
             self._turn_off_canceller()
             self._turn_off_canceller = None
         await super().async_will_remove_from_hass()
+
+
+class BticinoBridgeBusySensor(CoordinatorEntity[BticinoIntercomCoordinator], BinarySensorEntity):
+    """Indicates whether the intercom is busy (active call in progress)."""
+
+    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:phone-in-talk"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Initialize the busy sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_bridge_busy"
+        self._attr_name = "Bridge Busy"
+        self._attr_is_on = self._get_busy_state()
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info linking to the main bridge device."""
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
+        )
+        bridge_module_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id)
+        model = bridge_module_data.get("type") if bridge_module_data else None
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
+            model=model,
+        )
+
+    def _get_busy_state(self) -> bool:
+        """Get the busy state from coordinator data."""
+        if not self.coordinator.data:
+            return False
+        bridge_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id, {})
+        return bool(bridge_data.get("busy", False))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._attr_is_on = self._get_busy_state()
+        self.async_write_ha_state()

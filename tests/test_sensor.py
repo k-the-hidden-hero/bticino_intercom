@@ -20,8 +20,8 @@ async def test_sensor_entities_created(
 ) -> None:
     """Test that expected sensor entities are created."""
     states = hass.states.async_entity_ids(SENSOR_DOMAIN)
-    # At minimum: last_event_type, last_call_timestamp, uptime, wifi, ws_status, local_ip, config_update, last_seen
-    assert len(states) >= 7
+    # last_event_type, last_call_timestamp, uptime, wifi, ws_status, local_ip
+    assert len(states) >= 6
 
 
 async def test_event_sensor_state(
