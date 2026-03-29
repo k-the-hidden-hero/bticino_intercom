@@ -51,6 +51,7 @@ async def async_setup_entry(
     # --- Event Sensors (Re-linked to bridge device) ---
     entities.append(BticinoEventSensor(coordinator))
     entities.append(BticinoLastCallTimestampSensor(coordinator))
+    entities.append(BticinoCallCountSensor(coordinator))
 
     # --- Bridge Status Sensors (Keep as is) ---
     if bridge_module_data:
@@ -345,6 +346,74 @@ class BticinoLastCallTimestampSensor(CoordinatorEntity[BticinoIntercomCoordinato
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes."""
         return getattr(self, "_attr_extra_state_attributes", {})
+
+
+class BticinoCallCountSensor(CoordinatorEntity[BticinoIntercomCoordinator], SensorEntity):
+    """Counts the number of calls in the current event history."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:phone-log"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Initialize the call count sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_call_count"
+        self._attr_name = "Calls"
+        self._update_state()
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Return device info linking to the main bridge device."""
+        if not self.coordinator.main_device_id:
+            return None
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
+        )
+        bridge_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id)
+        model = bridge_data.get("type") if bridge_data else None
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
+            model=model,
+        )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_state()
+        self.async_write_ha_state()
+
+    def _update_state(self) -> None:
+        """Count calls in event history."""
+        if not self.coordinator.data:
+            self._attr_available = False
+            return
+
+        self._attr_available = True
+        events = self.coordinator.data.get("events_history", {}).get(self.coordinator.home_id, [])
+
+        total = 0
+        missed = 0
+        answered = 0
+        for event in events:
+            subevents = event.get("subevents", [])
+            if subevents and isinstance(subevents, list):
+                first = subevents[0] if isinstance(subevents[0], dict) else {}
+                stype = first.get("type", "")
+                if stype in ("missed_call", "accepted_call", "incoming_call"):
+                    total += 1
+                    if stype == "missed_call":
+                        missed += 1
+                    elif stype == "accepted_call":
+                        answered += 1
+
+        self._attr_native_value = total
+        self._attr_extra_state_attributes = {
+            "answered": answered,
+            "missed": missed,
+        }
 
 
 # --- New Bridge Status Sensors ---

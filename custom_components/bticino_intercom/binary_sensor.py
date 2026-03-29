@@ -85,7 +85,7 @@ async def async_setup_entry(
 class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
     """Representation of a BTicino call sensor."""
 
-    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
+    _attr_device_class = BinarySensorDeviceClass.SOUND
     _attr_icon = "mdi:doorbell-video"
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
@@ -183,6 +183,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
                     attrs["last_call_type"] = first_subevent.get("type")
                     attrs["last_call_time"] = format_timestamp_iso(first_subevent.get("time"))
                     attrs["last_call_message"] = first_subevent.get("message")
+                    attrs["session_id"] = first_subevent.get("session_id")
                     snapshot_data = first_subevent.get("snapshot")
                     if isinstance(snapshot_data, dict):
                         attrs["snapshot_url"] = snapshot_data.get("url")

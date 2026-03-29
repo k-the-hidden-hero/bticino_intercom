@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.components.lock import LockEntity, LockEntityFeature
@@ -95,6 +96,7 @@ class BticinoLock(BticinoEntity, LockEntity):
         self._attr_unique_id = f"{coordinator.entry.entry_id}_lock_{module_id}"
         self._attr_is_locked = bool(module_data.get("lock", True))
         self._relock_canceller: Callable[[], None] | None = None
+        self._last_unlocked: str | None = None
 
     @property
     def available(self) -> bool:
@@ -123,6 +125,7 @@ class BticinoLock(BticinoEntity, LockEntity):
         attrs = {
             "reachable": module_data.get("reachable"),
             "last_used": format_timestamp_iso(module_data.get("last_user_interaction")),
+            "last_unlocked": self._last_unlocked,
         }
         return {k: v for k, v in attrs.items() if v is not None}
 
@@ -137,6 +140,7 @@ class BticinoLock(BticinoEntity, LockEntity):
             return
 
         self._attr_is_locked = False
+        self._last_unlocked = datetime.now(UTC).isoformat()
         self.async_write_ha_state()
 
         self._relock_canceller = async_call_later(self.hass, LOCK_RELOCK_DELAY, self._relock_callback)
