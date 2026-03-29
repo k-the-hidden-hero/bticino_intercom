@@ -249,7 +249,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         _LOGGER.debug("Creating and storing WebSocket connection manager task.")
-        connection_task = hass.async_create_task(
+        connection_task = hass.async_create_background_task(
             _websocket_connection_manager(),
             name=f"{DOMAIN} WebSocket Manager - {entry.entry_id}",
         )
