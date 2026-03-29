@@ -33,15 +33,15 @@
         "title": "BTicino Light Options",
         "description": "Configure how your BTicino lights behave",
         "data": {
-          "light_as_lock": "Use lighting relay as lock (alternative setup)"
+          "light_as_lock": "Use light relay as door lock (Spanish installation method)"
         }
       }
     },
     "abort": {
-        "cannot_connect": "Failed to connect, please try again later."
+      "cannot_connect": "Failed to connect, please try again later."
     },
     "error": {
-        "cannot_connect": "Failed to connect, please try again later."
+      "cannot_connect": "Failed to connect, please try again later."
     }
   },
   "entity": {
@@ -50,13 +50,18 @@
         "name": "External Door"
       },
       "internal_door": {
-         "name": "Internal Door"
+        "name": "Internal Door"
       }
     },
-     "binary_sensor": {
-       "call": {
-         "name": "Call"
-       }
-     }
+    "binary_sensor": {
+      "call": {
+        "name": "Call"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Last Event"
+      }
+    }
   }
 }
