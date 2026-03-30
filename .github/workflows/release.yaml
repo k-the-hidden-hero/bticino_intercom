@@ -26,7 +26,15 @@ jobs:
 
       - name: Get version from tag
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          # Mark as prerelease if tag contains -dev, -alpha, -beta, -rc
+          if [[ "$VERSION" == *-dev* ]] || [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]] || [[ "$VERSION" == *-rc* ]]; then
+            echo "PRERELEASE=true" >> $GITHUB_ENV
+          else
+            echo "PRERELEASE=false" >> $GITHUB_ENV
+          fi
 
       - name: Package integration into zip
         run: |
@@ -39,6 +47,6 @@ jobs:
           name: Release ${{ env.VERSION }}
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ env.PRERELEASE == 'true' }}
           files: |
             ${{ github.workspace }}/bticino_intercom-${{ env.VERSION }}.zip
