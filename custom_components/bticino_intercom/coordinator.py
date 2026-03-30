@@ -202,11 +202,23 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return final_data
 
         except AuthError as err:
+            # Auth errors are critical - must re-authenticate
             raise UpdateFailed(f"Authentication error: {err}") from err
-        except ApiError as err:
-            raise UpdateFailed(f"API error: {err}") from err
-        except Exception as err:
-            _LOGGER.exception("Unexpected error during data fetch")
+        except (ApiError, Exception) as err:
+            # Transient errors (500, timeout, network): return last known data
+            # instead of raising UpdateFailed which marks ALL entities unavailable.
+            # This matches mobile app behavior: show last known state during outages.
+            has_modules = self.data is not None and bool(self.data.get("modules"))
+            if has_modules:
+                _LOGGER.warning(
+                    "Error during update (%s: %s), keeping last known data. "
+                    "Entities remain available with last known state.",
+                    type(err).__name__, err,
+                )
+                return self.data
+            if isinstance(err, ApiError):
+                raise UpdateFailed(f"API error (no previous data): {err}") from err
+            _LOGGER.exception("Unexpected error during data fetch (no previous data)")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     def _process_websocket_event(self, message: dict[str, Any]) -> bool:

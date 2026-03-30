@@ -139,8 +139,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Get the listener task from the client
                     listener_task = websocket_client.get_listener_task()
                     if listener_task:
-                        # Wait for the listener task, but periodically check for stale WS
+                        # Re-subscribe loop: periodically send fresh token on same connection
+                        # (like the BTicino Security mobile app does) + check for stale WS
                         _LOGGER.debug("Waiting for WebSocket listener task to complete...")
+                        last_subscribe = asyncio.get_event_loop().time()
                         while not listener_task.done():
                             try:
                                 await asyncio.wait_for(asyncio.shield(listener_task), timeout=60)
@@ -151,8 +153,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                     listener_task.cancel()
                                     with suppress(asyncio.CancelledError):
                                         await listener_task
+                                    coordinator.ws_stale = False
                                     break
-                                # Otherwise keep waiting
+                                # Proactive re-subscribe with fresh token to keep session alive
+                                elapsed = asyncio.get_event_loop().time() - last_subscribe
+                                if elapsed >= TOKEN_RESUBSCRIBE_INTERVAL:
+                                    try:
+                                        _LOGGER.info("Re-subscribing with fresh token (%.0fs elapsed)...", elapsed)
+                                        await websocket_client._subscribe()
+                                        last_subscribe = asyncio.get_event_loop().time()
+                                        _LOGGER.info("Re-subscribe successful, connection kept alive.")
+                                    except Exception as resub_err:
+                                        _LOGGER.warning("Re-subscribe failed (%s), forcing reconnect.", resub_err)
+                                        listener_task.cancel()
+                                        with suppress(asyncio.CancelledError):
+                                            await listener_task
+                                        break
                             except asyncio.CancelledError:
                                 raise
                         else:
