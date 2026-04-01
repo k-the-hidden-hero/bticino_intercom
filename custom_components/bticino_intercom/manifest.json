@@ -3,7 +3,7 @@
   "name": "BTicino Classe 100X/300X",
   "codeowners": ["@k-the-hidden-hero"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["diagnostics"],
   "documentation": "https://github.com/k-the-hidden-hero/bticino_intercom",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/k-the-hidden-hero/bticino_intercom/issues",
