@@ -54,6 +54,10 @@ def mock_modules_data() -> dict[str, Any]:
             "firmware_name": "1.2.3",
             "reachable": True,
             "variant": "BNC1:bnc1_bridge",
+            "uptime": 3600,
+            "wifi_strength": 65,
+            "websocket_connected": True,
+            "local_ipv4": "192.168.1.100",
         },
         EXTERNAL_UNIT_ID: {
             "id": EXTERNAL_UNIT_ID,
@@ -80,6 +84,35 @@ def mock_modules_data() -> dict[str, Any]:
             "variant": "BNSL:bnsl_staircase_light",
         },
     }
+
+
+@pytest.fixture
+def mock_events_history() -> list[dict[str, Any]]:
+    """Return event history data for sensors."""
+    return [
+        {
+            "id": "evt_1",
+            "type": "outdoor",
+            "time": 1700000100,
+            "module_id": EXTERNAL_UNIT_ID,
+            "subevents": [
+                {
+                    "type": "missed_call",
+                    "time": 1700000200,
+                    "message": "Missed call from Citofono Strada",
+                    "session_id": SESSION_ID,
+                    "snapshot": {
+                        "url": "https://example.com/snapshot.jpg",
+                        "expires_at": 1700100000,
+                    },
+                    "vignette": {
+                        "url": "https://example.com/vignette.jpg",
+                        "expires_at": 1700100000,
+                    },
+                }
+            ],
+        }
+    ]
 
 
 @pytest.fixture
@@ -239,18 +272,24 @@ def ws_accepted_call() -> dict[str, Any]:
     }
 
 
-@pytest.fixture
-async def mock_setup_entry(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_modules_data: dict[str, Any],
-    enable_custom_integrations: None,
-) -> MockConfigEntry:
-    """Set up the integration with mocked pybticino."""
-    mock_config_entry.add_to_hass(hass)
+# --- Persistent mock fixtures for production objects ---
 
-    mock_account = AsyncMock()
-    mock_account.homes = {
+
+@pytest.fixture
+def mock_auth_handler() -> AsyncMock:
+    """Create a persistent mock AuthHandler."""
+    mock_auth = AsyncMock()
+    mock_auth.get_access_token = AsyncMock(return_value="fake_token")
+    mock_auth.set_tokens = MagicMock()
+    mock_auth.close_session = AsyncMock()
+    return mock_auth
+
+
+@pytest.fixture
+def mock_account(mock_modules_data, mock_events_history) -> AsyncMock:
+    """Create a persistent mock AsyncAccount."""
+    mock_acct = AsyncMock()
+    mock_acct.homes = {
         HOME_ID: MagicMock(
             id=HOME_ID,
             name="Test Home",
@@ -258,41 +297,120 @@ async def mock_setup_entry(
             modules=[MagicMock(id=mid, raw_data=mdata) for mid, mdata in mock_modules_data.items()],
         )
     }
-    mock_account.async_update_topology = AsyncMock()
-    mock_account.async_get_home_status = AsyncMock(
+    mock_acct.async_update_topology = AsyncMock()
+    mock_acct.async_get_home_status = AsyncMock(
         return_value={
             "body": {"home": {"modules": list(mock_modules_data.values())}},
         }
     )
-    mock_account.async_get_events = AsyncMock(
+    mock_acct.async_get_events = AsyncMock(
         return_value={
-            "body": {"home": {"events": []}},
+            "body": {"home": {"events": mock_events_history}},
         }
     )
-    mock_account.async_get_turn_servers = AsyncMock(return_value=[])
+    mock_acct.async_get_turn_servers = AsyncMock(return_value=[])
+    mock_acct.async_set_module_state = AsyncMock()
+    return mock_acct
 
-    mock_auth = AsyncMock()
-    mock_auth.get_access_token = AsyncMock(return_value="fake_token")
-    mock_auth.set_tokens = MagicMock()
 
+@pytest.fixture
+def mock_websocket_client() -> AsyncMock:
+    """Create a persistent mock WebsocketClient."""
     mock_ws = AsyncMock()
     mock_ws.connect = AsyncMock()
     mock_ws.disconnect = AsyncMock()
     mock_ws.get_listener_task = MagicMock(return_value=None)
+    return mock_ws
 
-    mock_signaling = AsyncMock()
-    mock_signaling.is_connected = False
+
+@pytest.fixture
+def mock_signaling_client() -> AsyncMock:
+    """Create a persistent mock SignalingClient."""
+    mock_sig = AsyncMock()
+    mock_sig.is_connected = False
+    return mock_sig
+
+
+async def _setup_integration(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+) -> MockConfigEntry:
+    """Shared helper to set up the integration with mocked pybticino."""
+    config_entry.add_to_hass(hass)
 
     with (
-        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
         patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
-        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_ws),
-        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
         patch("custom_components.bticino_intercom.Store") as mock_store_cls,
     ):
         mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
         mock_store_cls.return_value.async_save = AsyncMock()
-        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        mock_store_cls.return_value.async_remove = AsyncMock()
+        await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
 
-    return mock_config_entry
+    return config_entry
+
+
+@pytest.fixture
+async def mock_setup_entry(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
+) -> MockConfigEntry:
+    """Set up the integration with mocked pybticino."""
+    return await _setup_integration(
+        hass,
+        mock_config_entry,
+        mock_auth_handler,
+        mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
+
+
+@pytest.fixture
+def mock_config_entry_light_as_lock() -> MockConfigEntry:
+    """Create a mock config entry with light_as_lock enabled."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="BTicino Test",
+        data={
+            "home_id": HOME_ID,
+            "username": "test@example.com",
+            "password": "testpass",
+        },
+        options={"light_as_lock": True},
+        unique_id=f"{HOME_ID}_lal",
+    )
+
+
+@pytest.fixture
+async def mock_setup_entry_light_as_lock(
+    hass: HomeAssistant,
+    mock_config_entry_light_as_lock: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
+) -> MockConfigEntry:
+    """Set up the integration with light_as_lock=True."""
+    return await _setup_integration(
+        hass,
+        mock_config_entry_light_as_lock,
+        mock_auth_handler,
+        mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )

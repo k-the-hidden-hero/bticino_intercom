@@ -191,8 +191,8 @@ async def test_light_as_lock_unlock_sends_on(
     """Test unlocking light_as_lock sends on=True to the API."""
     # With light_as_lock, there are 2 lock entities. Find the one for the light module.
     all_locks = hass.states.async_entity_ids(LOCK_DOMAIN)
-    # The light_as_lock entity has "staircase_light" in its entity_id (from module name)
-    light_lock_entities = [s for s in all_locks if "staircase" in s or "light" in s.lower()]
+    # The light_as_lock entity has "luci_scale" in its entity_id (from module name)
+    light_lock_entities = [s for s in all_locks if "luci" in s or "scale" in s]
     assert len(light_lock_entities) == 1
     entity_id = light_lock_entities[0]
 

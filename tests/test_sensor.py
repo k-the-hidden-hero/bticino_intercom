@@ -63,18 +63,23 @@ async def test_event_sensor_updates_on_websocket(
     states = hass.states.async_entity_ids(SENSOR_DOMAIN)
     event_entity = next(s for s in states if "last_event_type" in s)
 
-    # Simulate a websocket call event
+    # Simulate a websocket call event (RTC offer format)
+    from .conftest import BRIDGE_MAC
+
     message = {
+        "push_type": "BNC1-rtc",
         "extra_params": {
-            "device_id": EXT_UNIT_MODULE_ID,
+            "device_id": BRIDGE_MAC,
+            "session_id": "sess_test_001",
             "data": {
+                "type": "offer",
                 "session_description": {
                     "type": "call",
                     "module_id": EXT_UNIT_MODULE_ID,
-                    "time": 1700001000,
-                }
+                    "sdp": "v=0\r\n",
+                },
             },
-        }
+        },
     }
     coordinator._process_websocket_event(message)
     coordinator.async_set_updated_data(coordinator.data)

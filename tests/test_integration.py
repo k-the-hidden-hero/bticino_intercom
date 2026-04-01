@@ -5,7 +5,7 @@ coordinator, entities, device/entity registries, and lifecycle events.
 """
 
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
@@ -47,8 +47,8 @@ async def test_device_registry_bridge_created(
 
     assert device is not None
     assert device.manufacturer == "BTicino"
-    assert device.model == "BNCX"
-    assert "Casa Test" in device.name
+    assert device.model == "BNC1"
+    assert "Test Home" in device.name
 
 
 async def test_entity_registry_all_entities(
@@ -102,19 +102,21 @@ async def test_websocket_call_updates_binary_sensor_and_event_sensor(
     # Verify initial states
     assert hass.states.get(binary_sensor_id).state == STATE_OFF
 
-    # Simulate incoming call via websocket
+    # Simulate incoming call via websocket (RTC offer format)
     message = {
+        "push_type": "BNC1-rtc",
         "extra_params": {
-            "device_id": EXT_UNIT_MODULE_ID,
+            "device_id": BRIDGE_MAC,
+            "session_id": "sess_live_001",
             "data": {
+                "type": "offer",
                 "session_description": {
                     "type": "call",
                     "module_id": EXT_UNIT_MODULE_ID,
-                    "session_id": "sess_live_001",
-                    "time": 1700100000,
-                }
+                    "sdp": "v=0\r\n",
+                },
             },
-        }
+        },
     }
     await coordinator._handle_websocket_message(message)
     await hass.async_block_till_done()
@@ -134,35 +136,36 @@ async def test_websocket_call_then_terminate_full_cycle(
     coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
     binary_sensor_id = hass.states.async_entity_ids(BINARY_SENSOR_DOMAIN)[0]
 
-    # 1. Incoming call
+    # 1. Incoming call (RTC offer)
     call_msg = {
+        "push_type": "BNC1-rtc",
         "extra_params": {
-            "device_id": EXT_UNIT_MODULE_ID,
+            "device_id": BRIDGE_MAC,
+            "session_id": "sess_001",
             "data": {
+                "type": "offer",
                 "session_description": {
                     "type": "call",
                     "module_id": EXT_UNIT_MODULE_ID,
-                    "time": 1700100000,
-                }
+                    "sdp": "v=0\r\n",
+                },
             },
-        }
+        },
     }
     await coordinator._handle_websocket_message(call_msg)
     await hass.async_block_till_done()
     assert hass.states.get(binary_sensor_id).state == STATE_ON
 
-    # 2. Call terminated
+    # 2. Call terminated (RTC terminate)
     terminate_msg = {
+        "push_type": "BNC1-rtc",
         "extra_params": {
-            "device_id": EXT_UNIT_MODULE_ID,
+            "device_id": BRIDGE_MAC,
+            "session_id": "sess_001",
             "data": {
-                "session_description": {
-                    "type": "terminate",
-                    "module_id": EXT_UNIT_MODULE_ID,
-                    "time": 1700100030,
-                }
+                "type": "terminate",
             },
-        }
+        },
     }
     await coordinator._handle_websocket_message(terminate_msg)
     await hass.async_block_till_done()
@@ -187,33 +190,36 @@ async def test_websocket_call_fires_logbook_events(
     hass.bus.async_listen(EVENT_LOGBOOK_INCOMING_CALL, lambda e: incoming_events.append(e))
     hass.bus.async_listen(EVENT_LOGBOOK_TERMINATED, lambda e: terminated_events.append(e))
 
-    # Call
+    # Call (RTC offer)
     call_msg = {
+        "push_type": "BNC1-rtc",
         "extra_params": {
-            "device_id": EXT_UNIT_MODULE_ID,
+            "device_id": BRIDGE_MAC,
+            "session_id": "sess_logbook",
             "data": {
+                "type": "offer",
                 "session_description": {
                     "type": "call",
                     "module_id": EXT_UNIT_MODULE_ID,
-                }
+                    "sdp": "v=0\r\n",
+                },
             },
-        }
+        },
     }
     await coordinator._handle_websocket_message(call_msg)
     await hass.async_block_till_done()
     assert len(incoming_events) == 1
 
-    # Terminate
+    # Terminate (RTC terminate)
     term_msg = {
+        "push_type": "BNC1-rtc",
         "extra_params": {
-            "device_id": EXT_UNIT_MODULE_ID,
+            "device_id": BRIDGE_MAC,
+            "session_id": "sess_logbook",
             "data": {
-                "session_description": {
-                    "type": "terminate",
-                    "module_id": EXT_UNIT_MODULE_ID,
-                }
+                "type": "terminate",
             },
-        }
+        },
     }
     await coordinator._handle_websocket_message(term_msg)
     await hass.async_block_till_done()
@@ -288,7 +294,8 @@ async def test_unload_and_reload(
     mock_setup_entry: MockConfigEntry,
     mock_auth_handler: AsyncMock,
     mock_account: AsyncMock,
-    mock_websocket_client,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
 ) -> None:
     """Test unloading and re-setting up the integration."""
     assert mock_setup_entry.state is ConfigEntryState.LOADED
@@ -303,9 +310,19 @@ async def test_unload_and_reload(
     for lock_id in lock_states:
         assert hass.states.get(lock_id).state == "unavailable"
 
-    # Re-setup
-    assert await hass.config_entries.async_setup(mock_setup_entry.entry_id)
-    await hass.async_block_till_done()
+    # Re-setup with patches active
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
+        assert await hass.config_entries.async_setup(mock_setup_entry.entry_id)
+        await hass.async_block_till_done()
+
     assert mock_setup_entry.state is ConfigEntryState.LOADED
 
     # Entities should be available again
@@ -318,7 +335,8 @@ async def test_options_change_triggers_reload(
     mock_setup_entry: MockConfigEntry,
     mock_auth_handler: AsyncMock,
     mock_account: AsyncMock,
-    mock_websocket_client,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
 ) -> None:
     """Test that changing options triggers a reload of the integration."""
     assert mock_setup_entry.state is ConfigEntryState.LOADED
@@ -330,13 +348,23 @@ async def test_options_change_triggers_reload(
     lock_entities = hass.states.async_entity_ids(LOCK_DOMAIN)
     lock_count_before = len(lock_entities)
 
-    # Change option via options flow
-    result = await hass.config_entries.options.async_init(mock_setup_entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={"light_as_lock": True},
-    )
-    await hass.async_block_till_done()
+    # Change option via options flow - need patches active for the reload
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
+
+        result = await hass.config_entries.options.async_init(mock_setup_entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={"light_as_lock": True},
+        )
+        await hass.async_block_till_done()
 
     # After reload with light_as_lock=True:
     # - light entity should be unavailable (entity stays in registry but platform doesn't create it)

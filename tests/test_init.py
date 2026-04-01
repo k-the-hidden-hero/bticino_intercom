@@ -1,7 +1,8 @@
 """Tests for BTicino integration setup and unload."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pybticino.exceptions import ApiError, AuthError
@@ -10,6 +11,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.bticino_intercom.const import DOMAIN
 
 from .conftest import HOME_ID
+
+pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
 async def test_setup_entry_success(
@@ -26,22 +29,34 @@ async def test_setup_entry_success(
 async def test_setup_entry_auth_failure(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_websocket_client,
-    mock_account,
 ) -> None:
     """Test setup fails with ConfigEntryAuthFailed on auth error."""
-    with patch(
-        "custom_components.bticino_intercom.AuthHandler",
-        autospec=True,
-    ) as mock_auth_class:
-        mock_auth = mock_auth_class.return_value
-        mock_auth.get_access_token = AsyncMock(side_effect=AuthError("Bad credentials"))
+    mock_auth = MagicMock()
+    mock_auth.get_access_token = AsyncMock(side_effect=AuthError("Bad credentials"))
+    mock_auth.set_tokens = MagicMock()
 
+    mock_ws = AsyncMock()
+    mock_ws.connect = AsyncMock()
+    mock_ws.disconnect = AsyncMock()
+    mock_ws.get_listener_task = MagicMock(return_value=None)
+
+    mock_signaling = AsyncMock()
+    mock_signaling.is_connected = False
+
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=AsyncMock()),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_ws),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
         mock_config_entry.add_to_hass(hass)
         await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
 
-    # ConfigEntryAuthFailed triggers reauth. Since async_step_reauth is not
+    # ConfigEntryAuthFailed triggers reauth. Since async_step_reauth is
     # implemented, HA sets the entry state to SETUP_ERROR.
     assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
 
@@ -49,17 +64,29 @@ async def test_setup_entry_auth_failure(
 async def test_setup_entry_api_failure(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_websocket_client,
-    mock_account,
 ) -> None:
     """Test setup raises ConfigEntryNotReady on API error."""
-    with patch(
-        "custom_components.bticino_intercom.AuthHandler",
-        autospec=True,
-    ) as mock_auth_class:
-        mock_auth = mock_auth_class.return_value
-        mock_auth.get_access_token = AsyncMock(side_effect=ApiError(503, "Service unavailable"))
+    mock_auth = MagicMock()
+    mock_auth.get_access_token = AsyncMock(side_effect=ApiError(503, "Service unavailable"))
+    mock_auth.set_tokens = MagicMock()
 
+    mock_ws = AsyncMock()
+    mock_ws.connect = AsyncMock()
+    mock_ws.disconnect = AsyncMock()
+    mock_ws.get_listener_task = MagicMock(return_value=None)
+
+    mock_signaling = AsyncMock()
+    mock_signaling.is_connected = False
+
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=AsyncMock()),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_ws),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
         mock_config_entry.add_to_hass(hass)
         await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
