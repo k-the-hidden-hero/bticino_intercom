@@ -6,6 +6,13 @@ from typing import Any
 
 import aiohttp
 from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera.webrtc import (
+    WebRTCAnswer,
+    WebRTCCandidate,
+    WebRTCClientConfiguration,
+    WebRTCError,
+    WebRTCSendMessage,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -13,6 +20,8 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utc_from_timestamp, utcnow
+from pybticino import AsyncAccount, SignalingClient
+from webrtc_models import RTCConfiguration, RTCIceCandidateInit, RTCIceServer
 
 from .const import DOMAIN, IMAGE_CACHE_SECONDS
 from .coordinator import BticinoIntercomCoordinator
@@ -37,9 +46,13 @@ async def async_setup_entry(
         _LOGGER.warning("No bridge device ID found, cannot set up cameras.")
         return
 
-    entities = [
+    account: AsyncAccount = hass.data[DOMAIN][entry.entry_id]["account"]
+    signaling_client: SignalingClient = hass.data[DOMAIN][entry.entry_id]["signaling_client"]
+
+    entities: list[Camera] = [
         BticinoSnapshotCamera(coordinator),
         BticinoVignetteCamera(coordinator),
+        BticinoWebRTCCamera(coordinator, account, signaling_client),
     ]
     async_add_entities(entities)
 
@@ -118,9 +131,21 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
     def _extract_image_from_event(self, event: dict) -> tuple[str | None, int | float | None, int | float | None]:
         """Extract image URL, expiry, and event time from an event dict.
 
+        Supports two formats:
+        - WS status events: snapshot_url/vignette_url directly in the event dict
+        - API history events: subevents[0].snapshot.url / subevents[0].vignette.url
+
         Returns (image_url, expires_at_ts, event_time_ts) or (None, None, time) if no image.
         """
         event_time_ts = event.get("time") or event.get("timestamp")
+
+        # Format B (WS status events): direct URL fields
+        url_key = f"{self._image_type}_url"  # "snapshot_url" or "vignette_url"
+        direct_url = event.get(url_key)
+        if direct_url:
+            return direct_url, None, event_time_ts
+
+        # Format from API history: nested in subevents
         subevents = event.get("subevents")
         if subevents and isinstance(subevents, list) and len(subevents) > 0:
             first_subevent = subevents[0] if isinstance(subevents[0], dict) else {}
@@ -128,6 +153,7 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             image_data = first_subevent.get(self._image_type)
             if isinstance(image_data, dict) and image_data.get("url"):
                 return image_data["url"], image_data.get("expires_at"), event_time_ts
+
         return None, None, event_time_ts
 
     def _update_state_internal(self) -> None:
@@ -165,7 +191,6 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return bytes of camera image."""
         now = utcnow()
-        _LOGGER.debug("%s: Camera image requested.", self.entity_id)
 
         # Return cached image if valid and not expired
         if (
@@ -173,46 +198,24 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             and self._cached_image_time is not None
             and (now - self._cached_image_time).total_seconds() < IMAGE_CACHE_SECONDS
         ):
-            _LOGGER.debug("%s: Returning cached image.", self.entity_id)
             return self._cached_image
-        elif self._cached_image is not None:
-            _LOGGER.debug(
-                "%s: Cache expired or invalid (time: %s).",
-                self.entity_id,
-                self._cached_image_time,
-            )
 
         # Check if the image URL is present and not expired
         if not self._image_url:
-            _LOGGER.warning("%s: No image URL available.", self.entity_id)
             return None
-        if self._image_expires_at:
-            _LOGGER.debug(
-                "%s: Current time: %s, Image expires at: %s",
-                self.entity_id,
-                now,
-                self._image_expires_at,
-            )
-            if now >= self._image_expires_at:
-                _LOGGER.warning("%s: Image URL has expired.", self.entity_id)
-                return None
-        else:
-            _LOGGER.warning("%s: Image expiration time is unknown.", self.entity_id)
-            # Decide whether to proceed without expiration check or return None
-            # Let's proceed for now, but log warning
+        if self._image_expires_at and now >= self._image_expires_at:
+            _LOGGER.debug("%s: Image URL has expired", self.entity_id)
+            return None
 
-        _LOGGER.debug("%s: Fetching new image from URL: %s", self.entity_id, self._image_url)
         session = async_get_clientsession(self.hass)
         try:
             async with session.get(self._image_url) as response:
-                _LOGGER.debug("%s: Received response status: %s", self.entity_id, response.status)
-                response.raise_for_status()  # Raise an exception for bad status codes
+                response.raise_for_status()
                 image_bytes = await response.read()
-                # Cache the fetched image
                 self._cached_image = image_bytes
                 self._cached_image_time = now
-                _LOGGER.info(
-                    "%s: Successfully fetched and cached image (%d bytes).",
+                _LOGGER.debug(
+                    "%s: Fetched and cached image (%d bytes)",
                     self.entity_id,
                     len(image_bytes),
                 )
@@ -221,7 +224,7 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             _LOGGER.error("%s: Error fetching camera image: %s", self.entity_id, err)
             return None
         except Exception as err:
-            _LOGGER.error("Unexpected error fetching camera image for %s: %s", self.entity_id, err)
+            _LOGGER.error("%s: Unexpected error fetching image: %s", self.entity_id, err)
             return None
 
 
@@ -243,3 +246,210 @@ class BticinoVignetteCamera(BticinoBaseEventCamera):
     def __init__(self, coordinator: BticinoIntercomCoordinator) -> None:
         """Initialize the vignette camera."""
         super().__init__(coordinator, image_type="vignette")
+
+
+class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera):
+    """BTicino WebRTC camera for live video from the intercom.
+
+    Uses HA's native async WebRTC support. When the frontend requests a stream,
+    this entity sends an SDP offer to the BTicino device via the Netatmo
+    signaling WebSocket and returns the answer SDP for peer connection setup.
+
+    ICE candidates from the browser are buffered until the signaling session
+    is established (the ack from the server can take 1-2 seconds).
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Live Video"
+    _attr_supported_features = CameraEntityFeature.STREAM
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        account: AsyncAccount,
+        signaling_client: SignalingClient,
+    ) -> None:
+        """Initialize the WebRTC camera."""
+        super().__init__(coordinator)
+        Camera.__init__(self)
+        self._account = account
+        self._signaling = signaling_client
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_webrtc"
+        self._turn_servers: list[RTCIceServer] = []
+        # Buffer for ICE candidates that arrive before session is ready
+        self._pending_candidates: list[RTCIceCandidateInit] = []
+        self._session_ready = False
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info linking to the main bridge device."""
+        device_name = (
+            f"BTicino Intercom - {self.coordinator.home_name}" if self.coordinator.home_name else "BTicino Intercom"
+        )
+        bridge_data = self.coordinator.data.get("modules", {}).get(self.coordinator.main_device_id)
+        model = bridge_data.get("type") if bridge_data else None
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.main_device_id)},
+            name=device_name,
+            manufacturer="BTicino",
+            model=model,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return True if the coordinator has data and bridge is known."""
+        return self.coordinator.last_update_success and self.coordinator.main_device_id is not None
+
+    async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
+        """Return a snapshot image if available (from last event)."""
+        last_event = self.coordinator.data.get("last_event", {})
+        snapshot_url = last_event.get("snapshot_url")
+        if not snapshot_url:
+            return None
+
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(snapshot_url) as resp:
+                resp.raise_for_status()
+                return await resp.read()
+        except aiohttp.ClientError:
+            _LOGGER.debug("Failed to fetch snapshot for WebRTC camera")
+            return None
+
+    async def _flush_pending_candidates(self) -> None:
+        """Send all buffered ICE candidates now that the session is ready."""
+        if not self._pending_candidates:
+            return
+        _LOGGER.debug("Flushing %d buffered ICE candidates", len(self._pending_candidates))
+        for candidate in self._pending_candidates:
+            await self._signaling.send_candidate(
+                candidate=candidate.candidate,
+                sdp_m_line_index=candidate.sdp_m_line_index or 0,
+            )
+        self._pending_candidates.clear()
+
+    async def async_handle_async_webrtc_offer(
+        self,
+        offer_sdp: str,
+        session_id: str,
+        send_message: WebRTCSendMessage,
+    ) -> None:
+        """Handle a WebRTC offer from the HA frontend.
+
+        Sends the browser's SDP offer to the BTicino device via the signaling
+        WebSocket. The device responds with an SDP answer (or a terminate error
+        if it's not accepting connections).
+        """
+        device_id = self.coordinator.main_device_id
+        if not device_id:
+            send_message(WebRTCError(code="no_device", message="No bridge device found"))
+            return
+
+        self._session_ready = False
+        self._pending_candidates.clear()
+
+        try:
+            # Ensure signaling is connected
+            if not self._signaling.is_connected:
+                await self._signaling.connect()
+
+            # Set up callbacks for this session
+            async def on_answer(sig_session_id: str, sdp: str) -> None:
+                _LOGGER.info("Received answer SDP for session %s", sig_session_id)
+                send_message(WebRTCAnswer(answer=sdp))
+
+            async def on_candidate(sig_session_id: str, ice: dict) -> None:
+                candidate_str = ice.get("candidate", "")
+                sdp_m_line_index = ice.get("sdp_m_line_index", ice.get("sdpMLineIndex", 0))
+                _LOGGER.debug("Received remote ICE candidate (m=%d)", sdp_m_line_index)
+                send_message(
+                    WebRTCCandidate(
+                        RTCIceCandidateInit(
+                            candidate=candidate_str,
+                            sdp_m_line_index=sdp_m_line_index,
+                        )
+                    )
+                )
+
+            async def on_event(sig_session_id: str, event_type: str, data: dict) -> None:
+                error = data.get("data", {}).get("error", {})
+                error_msg = error.get("message", event_type) if error else event_type
+                _LOGGER.warning("Signaling event %s: %s", event_type, error_msg)
+                send_message(WebRTCError(code=event_type, message=error_msg))
+
+            self._signaling._on_answer = on_answer
+            self._signaling._on_candidate = on_candidate
+            self._signaling._on_event = on_event
+
+            # Find the first external unit module_id
+            module_id = None
+            for mid, mdata in self.coordinator.data.get("modules", {}).items():
+                variant = mdata.get("variant", "")
+                if "bneu_external_unit" in variant:
+                    module_id = mid
+                    break
+
+            # Send the offer — this blocks until the ack is received
+            _LOGGER.info("Sending WebRTC offer to device %s (module=%s)", device_id, module_id)
+            await self._signaling.send_offer(
+                device_id=device_id,
+                sdp=offer_sdp,
+                module_id=module_id,
+            )
+
+            # Session is now ready — flush any buffered ICE candidates
+            self._session_ready = True
+            await self._flush_pending_candidates()
+
+        except Exception as err:
+            _LOGGER.exception("Failed to handle WebRTC offer")
+            send_message(WebRTCError(code="offer_failed", message=str(err)))
+
+    async def async_on_webrtc_candidate(self, session_id: str, candidate: RTCIceCandidateInit) -> None:
+        """Forward an ICE candidate from the HA frontend to the device.
+
+        If the signaling session isn't ready yet, buffer the candidate
+        and send it once the session is established.
+        """
+        if not self._session_ready or not self._signaling.session_id:
+            self._pending_candidates.append(candidate)
+            return
+
+        await self._signaling.send_candidate(
+            candidate=candidate.candidate,
+            sdp_m_line_index=candidate.sdp_m_line_index or 0,
+        )
+
+    @callback
+    def _async_get_webrtc_client_configuration(self) -> WebRTCClientConfiguration:
+        """Return WebRTC client configuration with TURN servers."""
+        return WebRTCClientConfiguration(
+            configuration=RTCConfiguration(ice_servers=list(self._turn_servers)),
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Fetch TURN servers when entity is added."""
+        await super().async_added_to_hass()
+
+        try:
+            ice_servers_raw = await self._account.async_get_turn_servers()
+            self._turn_servers = [
+                RTCIceServer(
+                    urls=server.get("urls", server.get("url", [])),
+                    username=server.get("username"),
+                    credential=server.get("credential"),
+                )
+                for server in ice_servers_raw
+            ]
+            _LOGGER.info("Loaded %d TURN/STUN servers", len(self._turn_servers))
+        except Exception:
+            _LOGGER.warning("Failed to fetch TURN servers, WebRTC may not work behind NAT")
+
+    @callback
+    def close_webrtc_session(self, session_id: str) -> None:
+        """Close the WebRTC session by sending terminate."""
+        self._session_ready = False
+        self._pending_candidates.clear()
+        if self._signaling.session_id:
+            self.hass.async_create_task(self._signaling.send_terminate())

@@ -9,3 +9,7 @@ home-assistant.log
 example_payload.json
 REVAMP.md
 bticino_intercom.egg-info/
+.env
+.credentials
+.local/
+ha-dev-config/

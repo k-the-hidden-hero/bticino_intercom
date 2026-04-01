@@ -27,7 +27,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
-from pybticino import AsyncAccount, AuthHandler, WebsocketClient
+from pybticino import AsyncAccount, AuthHandler, SignalingClient, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
 from .const import (
@@ -44,6 +44,8 @@ RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
 TOKEN_RESUBSCRIBE_INTERVAL = 3600  # Re-subscribe with fresh token every hour
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
+SIGNALING_CLIENT_KEY = "signaling_client"
+ACCOUNT_KEY = "account"
 COORDINATOR_KEY = "coordinator"
 START_LISTENER_REMOVE_KEY = "start_listener_remove"
 TOKEN_STORAGE_VERSION = 1
@@ -104,15 +106,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         message_callback=coordinator._handle_websocket_message,
         # Pass app_version etc. if needed/customized
     )
-    # Assign the created client back to the coordinator (already done in coordinator __init__?)
-    # Let's keep it explicit here for clarity, assuming coordinator might not always get it in init
     coordinator.websocket_client = websocket_client
 
-    # Store coordinator and websocket client in hass.data
+    # Create the signaling client for WebRTC (lazy-connected on first use)
+    signaling_client = SignalingClient(auth_handler=auth_handler)
+
+    # Store everything in hass.data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         COORDINATOR_KEY: coordinator,
         WEBSOCKET_CLIENT_KEY: websocket_client,
-        # WEBSOCKET_TASK_KEY will be added later
+        SIGNALING_CLIENT_KEY: signaling_client,
+        ACCOUNT_KEY: account,
     }
 
     # Fetch initial data using the coordinator's standard method
@@ -342,6 +346,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Clean up websocket client (disconnect is handled by task cancellation finally)
         entry_data.pop(WEBSOCKET_CLIENT_KEY, None)
+
+        # Clean up signaling client
+        signaling = entry_data.pop(SIGNALING_CLIENT_KEY, None)
+        if signaling and signaling.is_connected:
+            await signaling.disconnect()
+
+        entry_data.pop(ACCOUNT_KEY, None)
 
         # Clean up start listener if it exists
         start_listener_remove = entry_data.pop(START_LISTENER_REMOVE_KEY, None)

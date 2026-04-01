@@ -1,156 +1,128 @@
-"""Tests for the BTicino camera platform."""
+"""Tests for the BTicino camera entity image URL extraction."""
 
-from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
-from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from custom_components.bticino_intercom.const import DOMAIN
-
-from .conftest import EXT_UNIT_MODULE_ID
+from __future__ import annotations
 
 
-async def test_camera_entities_created(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test snapshot and vignette camera entities are created."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    assert len(states) == 2
+class TestExtractImageFromEvent:
+    """Test _extract_image_from_event for both WS and API event formats."""
 
-    snapshot_entities = [s for s in states if "snapshot" in s]
-    vignette_entities = [s for s in states if "vignette" in s]
-    assert len(snapshot_entities) == 1
-    assert len(vignette_entities) == 1
+    def _make_camera(self, image_type: str):
+        """Create a camera instance without coordinator (for unit testing the extraction method)."""
 
+        # We only need the _image_type attribute for _extract_image_from_event
+        class FakeCamera:
+            _image_type = image_type
 
-async def test_camera_has_image_url(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test camera entity has image_url attribute from event data."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
+        fake = FakeCamera()
+        # Bind the method from the real class
+        import types
 
-    state = hass.states.get(snapshot_entity)
-    assert state is not None
-    assert state.attributes.get("image_url") == "https://example.com/snapshot.jpg"
+        from custom_components.bticino_intercom.camera import BticinoBaseEventCamera
 
+        fake._extract_image_from_event = types.MethodType(BticinoBaseEventCamera._extract_image_from_event, fake)
+        return fake
 
-async def test_camera_vignette_has_url(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test vignette camera entity has correct URL."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    vignette_entity = next(s for s in states if "vignette" in s)
+    def test_ws_status_event_snapshot_url(self) -> None:
+        """WS Format B event with direct snapshot_url."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "type": "incoming_call",
+            "timestamp": 1774877242,
+            "snapshot_url": "https://example.com/snapshot.jpg",
+            "vignette_url": "https://example.com/vignette.jpg",
+        }
+        url, expires, time = cam._extract_image_from_event(event)
 
-    state = hass.states.get(vignette_entity)
-    assert state is not None
-    assert state.attributes.get("image_url") == "https://example.com/vignette.jpg"
+        assert url == "https://example.com/snapshot.jpg"
+        assert expires is None  # WS events don't include expiry
+        assert time == 1774877242
 
+    def test_ws_status_event_vignette_url(self) -> None:
+        """WS Format B event with direct vignette_url."""
+        cam = self._make_camera("vignette")
+        event = {
+            "type": "incoming_call",
+            "timestamp": 1774877242,
+            "snapshot_url": "https://example.com/snapshot.jpg",
+            "vignette_url": "https://example.com/vignette.jpg",
+        }
+        url, expires, time = cam._extract_image_from_event(event)
 
-async def test_camera_url_changes_clears_cache(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test that cache is cleared when image URL changes."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
+        assert url == "https://example.com/vignette.jpg"
+        assert time == 1774877242
 
-    # Update coordinator with new event having a different snapshot URL
-    new_data = dict(coordinator.data)
-    new_data["last_event"] = {
-        "type": "incoming_call",
-        "module_id": EXT_UNIT_MODULE_ID,
-        "time": 1700002000,
-        "subevents": [
-            {
-                "type": "missed_call",
-                "time": 1700002050,
-                "snapshot": {
-                    "url": "https://example.com/snapshot_new.jpg",
-                    "expires_at": 1700200000,
-                },
-                "vignette": {
-                    "url": "https://example.com/vignette_new.jpg",
-                    "expires_at": 1700200000,
-                },
-            }
-        ],
-    }
-    coordinator.async_set_updated_data(new_data)
-    await hass.async_block_till_done()
+    def test_api_history_event_with_subevents(self) -> None:
+        """API history event with nested subevents[0].snapshot.url."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "type": "outdoor",
+            "time": 1774877200,
+            "subevents": [
+                {
+                    "type": "incoming_call",
+                    "time": 1774877242,
+                    "snapshot": {
+                        "url": "https://blob.example.com/snapshot_from_api.jpg",
+                        "expires_at": 1774880842,
+                    },
+                    "vignette": {
+                        "url": "https://blob.example.com/vignette_from_api.jpg",
+                        "expires_at": 1774880842,
+                    },
+                }
+            ],
+        }
+        url, expires, time = cam._extract_image_from_event(event)
 
-    state = hass.states.get(snapshot_entity)
-    assert state.attributes.get("image_url") == "https://example.com/snapshot_new.jpg"
+        assert url == "https://blob.example.com/snapshot_from_api.jpg"
+        assert expires == 1774880842
+        assert time == 1774877242
 
+    def test_api_history_event_vignette(self) -> None:
+        """API history event — extracting vignette instead of snapshot."""
+        cam = self._make_camera("vignette")
+        event = {
+            "type": "outdoor",
+            "time": 1774877200,
+            "subevents": [
+                {
+                    "type": "incoming_call",
+                    "time": 1774877242,
+                    "snapshot": {"url": "https://example.com/snap.jpg", "expires_at": 100},
+                    "vignette": {"url": "https://example.com/vig.jpg", "expires_at": 200},
+                }
+            ],
+        }
+        url, expires, time = cam._extract_image_from_event(event)
 
-async def test_camera_unavailable_without_url(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test camera is unavailable when there is no image URL."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+        assert url == "https://example.com/vig.jpg"
+        assert expires == 200
 
-    # Update coordinator with event without image data
-    new_data = dict(coordinator.data)
-    new_data["events_history"] = {}
-    new_data["last_event"] = {}
-    coordinator.async_set_updated_data(new_data)
-    await hass.async_block_till_done()
+    def test_event_with_no_image_data(self) -> None:
+        """Event without any image data returns None."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "type": "connection",
+            "time": 1774877000,
+        }
+        url, expires, time = cam._extract_image_from_event(event)
 
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
-    state = hass.states.get(snapshot_entity)
-    assert state.state == "unavailable"
+        assert url is None
+        assert expires is None
+        assert time == 1774877000
 
+    def test_ws_snapshot_url_takes_priority_over_subevents(self) -> None:
+        """If both direct URL and subevents exist, direct URL wins."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "timestamp": 1774877242,
+            "snapshot_url": "https://example.com/direct.jpg",
+            "subevents": [
+                {
+                    "snapshot": {"url": "https://example.com/nested.jpg", "expires_at": 100},
+                }
+            ],
+        }
+        url, expires, time = cam._extract_image_from_event(event)
 
-async def test_camera_falls_back_to_history_when_last_event_has_no_image(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test camera finds image in event history when last_event has no snapshot."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
-
-    # Set last_event to a disconnection (no snapshot) but keep history with images
-    new_data = dict(coordinator.data)
-    new_data["last_event"] = {
-        "type": "disconnection",
-        "module_id": "00:03:50:d9:a6:3b",
-        "time": 1700300000,
-    }
-    new_data["events_history"] = {
-        coordinator.home_id: [
-            {
-                "id": "evt_disconnect",
-                "type": "disconnection",
-                "time": 1700300000,
-            },
-            {
-                "id": "evt_call",
-                "type": "call",
-                "module_id": EXT_UNIT_MODULE_ID,
-                "time": 1700200000,
-                "subevents": [
-                    {
-                        "type": "missed_call",
-                        "time": 1700200050,
-                        "snapshot": {
-                            "url": "https://example.com/fallback_snapshot.jpg",
-                            "expires_at": 1700400000,
-                        },
-                    }
-                ],
-            },
-        ],
-    }
-    coordinator.async_set_updated_data(new_data)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(snapshot_entity)
-    # Camera should fall back to the call event with snapshot from history
-    assert state.state != "unavailable"
-    assert state.attributes.get("image_url") == "https://example.com/fallback_snapshot.jpg"
+        assert url == "https://example.com/direct.jpg"

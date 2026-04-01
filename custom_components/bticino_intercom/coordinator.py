@@ -20,11 +20,15 @@ from .const import (
     DATA_LAST_EVENT,
     DEFAULT_NAME,
     DOMAIN,
+    EVENT_LOGBOOK_ACCEPTED_CALL,
     EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
     EVENT_LOGBOOK_INCOMING_CALL,
+    EVENT_LOGBOOK_MISSED_CALL,
     EVENT_LOGBOOK_TERMINATED,
+    EVENT_TYPE_ACCEPTED_CALL,
     EVENT_TYPE_ANSWERED_ELSEWHERE,
     EVENT_TYPE_INCOMING_CALL,
+    EVENT_TYPE_MISSED_CALL,
     EVENT_TYPE_TERMINATED,
     SIGNAL_CALL_RECEIVED,
     UPDATE_INTERVAL,
@@ -73,10 +77,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._main_device_id = None
         self._last_ws_message_time: datetime | None = None
         self._ws_stale = False
-        # Per-module active call sessions.
+        # Per-module active call sessions for retransmission dedup.
         # {"started": datetime, "last_seen": datetime,
         #  "watchdog": asyncio.Task | None}
         self._active_calls: dict[str, dict[str, Any]] = {}
+        # Current active call for WebRTC signaling (offer/answer SDP exchange)
+        self._active_call: dict[str, Any] | None = None
 
     @property
     def main_device_id(self) -> str | None:
@@ -94,6 +100,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if not self._normalized_home_name and self._home_name:
             self._normalized_home_name = self._home_name.lower().replace(" ", "_")
         return self._normalized_home_name or "unknown"
+
+    @property
+    def active_call(self) -> dict[str, Any] | None:
+        """Return the active call state, or None if no call is in progress."""
+        return self._active_call
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the API, register devices, and return the combined data."""
@@ -226,215 +237,250 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during data fetch")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
-    def _process_incoming_call_push(self, extra_params: dict[str, Any]) -> bool:
-        """Process incoming_call push to extract snapshot/vignette URLs.
+    def _process_websocket_event(self, message: dict[str, Any]) -> bool:
+        """Process event data from websocket and update self.data.
 
-        The BNC1-incoming_call push delivers snapshot and vignette URLs
-        directly in extra_params, outside of the RTC signaling path.
-        Convert them into the subevent format the camera entities expect.
+        Handles two event formats:
+        - Format A (RTC): push_type=BNC1-rtc, action type in extra_params.data.type
+          (offer/rescind/terminate), SDP in extra_params.data.session_description
+        - Format B (Status): push_type=BNC1-incoming_call/missed_call/accepted_call,
+          event info in extra_params directly (snapshot_url, vignette_url, etc.)
         """
-        snapshot_url = extra_params.get("snapshot_url")
-        vignette_url = extra_params.get("vignette_url")
-        device_id = extra_params.get("device_id")
+        extra_params = message.get("extra_params", {})
+        push_type = message.get("push_type", "")
 
-        if not snapshot_url and not vignette_url:
-            _LOGGER.debug("incoming_call push without snapshot/vignette URLs, ignoring")
+        # --- Format A: RTC events (BNC1-rtc) ---
+        rtc_data = extra_params.get("data", {})
+        rtc_action = rtc_data.get("type")  # "offer", "rescind", "terminate"
+
+        if rtc_action in ("offer", "rescind", "terminate"):
+            return self._process_rtc_event(message, extra_params, rtc_data, rtc_action)
+
+        # --- Format B: Status events (BNC1-incoming_call, etc.) ---
+        event_type = extra_params.get("event_type")
+        if event_type in ("incoming_call", "missed_call", "accepted_call"):
+            return self._process_status_event(message, extra_params, event_type)
+
+        # --- Unknown event ---
+        _LOGGER.debug("Unhandled websocket event (push_type=%s): %s", push_type, message)
+        return False
+
+    def _process_rtc_event(
+        self,
+        message: dict[str, Any],
+        extra_params: dict[str, Any],
+        rtc_data: dict[str, Any],
+        rtc_action: str,
+    ) -> bool:
+        """Process an RTC event (offer/rescind/terminate).
+
+        Note: only "offer" events contain session_description with module_id.
+        For "terminate" and "rescind", session_description is absent — we recover
+        the calling module from the active_call state set during the offer.
+        """
+        session_desc = rtc_data.get("session_description", {})
+        device_id = extra_params.get("device_id")
+        session_id = extra_params.get("session_id")
+
+        # For offer: module_id comes from session_description
+        # For terminate/rescind: recover from active_call state
+        calling_module_id = session_desc.get("module_id")
+        if not calling_module_id and self._active_call:
+            calling_module_id = self._active_call.get("module_id")
+
+        # Use calling_module_id for display, fall back to device_id (bridge MAC)
+        display_id = calling_module_id or device_id
+        if not display_id:
+            _LOGGER.debug("RTC event without module/device ID: %s", message)
             return False
 
-        now_ts = int(datetime.now(UTC).timestamp())
-        subevent: dict[str, Any] = {"time": now_ts}
-        if snapshot_url:
-            subevent["snapshot"] = {"url": snapshot_url}
-        if vignette_url:
-            subevent["vignette"] = {"url": vignette_url}
+        display_name = self.data.get("modules", {}).get(display_id, {}).get("name", display_id)
 
-        last_event = self.data.get(DATA_LAST_EVENT, {})
-        if last_event and last_event.get("type") == EVENT_TYPE_INCOMING_CALL:
-            # RTC call event already exists — enrich it with image URLs
-            last_event["subevents"] = [subevent]
-            _LOGGER.info("Enriched existing call event with snapshot/vignette from incoming_call push")
-        else:
-            # incoming_call arrived first (or standalone) — create a new entry
-            device_name = self.data.get("modules", {}).get(device_id, {}).get("name", device_id)
+        if rtc_action == "offer":
+            _LOGGER.info("Incoming call (RTC offer) from %s (%s)", display_name, display_id)
+
+            # Store active call state for WebRTC signaling
+            self._active_call = {
+                "session_id": session_id,
+                "tag_id": extra_params.get("tag_id"),
+                "correlation_id": extra_params.get("correlation_id"),
+                "device_id": device_id,
+                "module_id": calling_module_id,
+                "sdp": session_desc.get("sdp"),
+                "modules": session_desc.get("modules", []),
+            }
+            _LOGGER.debug("Active call state stored: session_id=%s, module=%s", session_id, calling_module_id)
+
+            # Call session tracking for retransmission dedup
+            now = datetime.now(UTC)
+            dedup_id = calling_module_id or display_id
+            session = self._active_calls.get(dedup_id)
+
+            if session is not None:
+                # Retransmission of an ongoing call: only refresh timestamp
+                session["last_seen"] = now
+                _LOGGER.debug("Ignoring retransmitted offer for module %s (session active)", dedup_id)
+                return False
+
+            # New call: open session with watchdog
+            watchdog = self.hass.async_create_background_task(
+                self._call_session_watchdog(dedup_id),
+                name=f"{DOMAIN} call watchdog - {dedup_id}",
+            )
+            self._active_calls[dedup_id] = {
+                "started": now,
+                "last_seen": now,
+                "watchdog": watchdog,
+            }
+
+            # Dispatch signal for binary sensor
+            if calling_module_id:
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
+
+            self.hass.bus.async_fire(
+                EVENT_LOGBOOK_INCOMING_CALL,
+                {"name": f"Incoming Call ({display_name})", "module_id": display_id},
+            )
+            self._update_last_event(EVENT_TYPE_INCOMING_CALL, display_id, display_name, message, extra_params)
+            return True
+
+        if rtc_action == "rescind":
+            _LOGGER.info("Call answered elsewhere (RTC rescind) for %s", display_name)
+
+            dedup_id = calling_module_id or display_id
+            self._end_call_session(dedup_id, reason="rescind")
+            if calling_module_id:
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
+            self._active_call = None
+
+            self.hass.bus.async_fire(
+                EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
+                {"name": f"Call Answered Elsewhere ({display_name})", "module_id": display_id},
+            )
+            self._update_last_event(EVENT_TYPE_ANSWERED_ELSEWHERE, display_id, display_name, message, extra_params)
+            return True
+
+        if rtc_action == "terminate":
+            _LOGGER.info("Call terminated (RTC terminate) for %s", display_name)
+
+            dedup_id = calling_module_id or display_id
+            self._end_call_session(dedup_id, reason="terminate")
+            if calling_module_id:
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
+            self._active_call = None
+
+            self.hass.bus.async_fire(
+                EVENT_LOGBOOK_TERMINATED,
+                {"name": f"Call Terminated ({display_name})", "module_id": display_id},
+            )
+            self._update_last_event(EVENT_TYPE_TERMINATED, display_id, display_name, message, extra_params)
+            return True
+
+        return False
+
+    def _process_status_event(
+        self,
+        message: dict[str, Any],
+        extra_params: dict[str, Any],
+        event_type: str,
+    ) -> bool:
+        """Process a status event (incoming_call, missed_call, accepted_call)."""
+        device_id = extra_params.get("device_id")
+        device_name = self.data.get("modules", {}).get(device_id, {}).get("name", device_id)
+
+        if event_type == "incoming_call":
+            _LOGGER.info("Incoming call status event (with snapshot) for %s", device_name)
+
+            # Store snapshot/vignette URLs in last_event for camera entities
+            snapshot_url = extra_params.get("snapshot_url")
+            vignette_url = extra_params.get("vignette_url")
+            timestamp = extra_params.get("timestamp")
+
             self.data[DATA_LAST_EVENT] = {
                 "type": EVENT_TYPE_INCOMING_CALL,
                 "timestamp": datetime.now(UTC),
-                "time": now_ts,
+                "time": timestamp,
                 "module_id": device_id,
                 "module_name": device_name,
-                "subevents": [subevent],
+                "session_id": extra_params.get("session_id"),
+                "event_id": extra_params.get("event_id"),
+                "snapshot_url": snapshot_url,
+                "vignette_url": vignette_url,
             }
-            _LOGGER.info("Created call event from incoming_call push with snapshot/vignette URLs")
 
-        return True
+            self.hass.bus.async_fire(
+                EVENT_LOGBOOK_INCOMING_CALL,
+                {"name": f"Incoming Call ({device_name})", "module_id": device_id},
+            )
+            return True
 
-    def _process_websocket_event(self, message: dict[str, Any]) -> bool:
-        """Process event data from websocket and update self.data."""
-        updated = False
-        extra_params = message.get("extra_params", {})
+        if event_type == "missed_call":
+            _LOGGER.info("Missed call for %s", device_name)
 
-        # --- Handle incoming_call push (snapshot/vignette delivery) ---
-        push_type = message.get("push_type", "")
-        if push_type.endswith("-incoming_call") or message.get("category") == "incoming_call":
-            return self._process_incoming_call_push(extra_params)
+            # Turn off binary sensor — use the calling module from active call if available,
+            # since device_id here is the bridge MAC, not the external unit module_id
+            calling_module = self._active_call.get("module_id") if self._active_call else None
+            if calling_module:
+                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module)
+            self._active_call = None
 
-        session_data = extra_params.get("data", {}).get("session_description", {})
+            self.data[DATA_LAST_EVENT] = {
+                "type": EVENT_TYPE_MISSED_CALL,
+                "timestamp": datetime.now(UTC),
+                "time": extra_params.get("timestamp"),
+                "module_id": device_id,
+                "module_name": device_name,
+                "session_id": extra_params.get("session_id"),
+                "event_id": extra_params.get("event_id"),
+            }
 
-        # Extract module/device ID - prioritize specific module from call, fallback to device_id
-        module_id = session_data.get("module_id") or extra_params.get("device_id")
+            self.hass.bus.async_fire(
+                EVENT_LOGBOOK_MISSED_CALL,
+                {"name": f"Missed Call ({device_name})", "module_id": device_id},
+            )
+            return True
 
-        if not module_id:
-            _LOGGER.debug("Websocket event without relevant module/device ID: %s", message)
-            return False
+        if event_type == "accepted_call":
+            _LOGGER.info("Call accepted for %s", device_name)
 
-        # Check if module exists in coordinator data (use self.data)
-        if module_id not in self.data.get("modules", {}):
-            _LOGGER.warning("Websocket event for unknown module %s: %s", module_id, message)
-            # Optionally try the device_id if module_id wasn't the primary one found
-            if module_id != extra_params.get("device_id") and extra_params.get("device_id") in self.data.get(
-                "modules", {}
-            ):
-                module_id = extra_params.get("device_id")
-                _LOGGER.debug("Falling back to device_id %s", module_id)
-            else:
-                return False  # Skip if neither ID is known
+            # Don't clear active_call here — accepted means someone answered,
+            # the WebRTC session may still be active on another device
 
-        current_module_data = self.data["modules"][module_id]  # Use self.data
-        module_updated = False
+            self.data[DATA_LAST_EVENT] = {
+                "type": EVENT_TYPE_ACCEPTED_CALL,
+                "timestamp": datetime.now(UTC),
+                "time": extra_params.get("timestamp"),
+                "module_id": device_id,
+                "module_name": device_name,
+                "session_id": extra_params.get("session_id"),
+                "event_id": extra_params.get("event_id"),
+            }
 
-        # --- Handle RTC Events (Call, Rescind, Terminate) based on session_data type ---
-        rtc_event_type = session_data.get("type")
-        if rtc_event_type in ["call", "rescind", "terminate"]:
-            calling_module_id = session_data.get("module_id", module_id)  # Module initiating/involved
-            calling_module_name = self.data.get("modules", {}).get(calling_module_id, {}).get("name", calling_module_id)
+            self.hass.bus.async_fire(
+                EVENT_LOGBOOK_ACCEPTED_CALL,
+                {"name": f"Call Accepted ({device_name})", "module_id": device_id},
+            )
+            return True
 
-            new_event_type = None
-            log_message = None
+        return False
 
-            if rtc_event_type == "call":
-                now = datetime.now(UTC)
-                session = self._active_calls.get(calling_module_id)
-
-                if session is None:
-                    # New call: open session and fire event only once
-                    watchdog = self.hass.async_create_background_task(
-                        self._call_session_watchdog(calling_module_id),
-                        name=f"{DOMAIN} call watchdog - {calling_module_id}",
-                    )
-                    self._active_calls[calling_module_id] = {
-                        "started": now,
-                        "last_seen": now,
-                        "watchdog": watchdog,
-                    }
-                    new_event_type = EVENT_TYPE_INCOMING_CALL
-                    log_message = f"Incoming call detected via RTC for module {calling_module_id}"
-                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
-                    self.hass.bus.async_fire(
-                        EVENT_LOGBOOK_INCOMING_CALL,
-                        {
-                            "name": f"Incoming Call ({calling_module_name})",
-                            "module_id": calling_module_id,
-                        },
-                    )
-                else:
-                    # Retransmission of an ongoing call: only refresh timestamp
-                    session["last_seen"] = now
-                    _LOGGER.debug(
-                        "Ignoring retransmitted 'call' for module %s (session active)",
-                        calling_module_id,
-                    )
-            elif rtc_event_type == "rescind":
-                self._end_call_session(calling_module_id, reason="rescind")
-                new_event_type = EVENT_TYPE_ANSWERED_ELSEWHERE
-                log_message = f"Call answered elsewhere for module {calling_module_id}"
-                # Dispatch signal to turn off binary sensor
-                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
-                # Fire Logbook event
-                self.hass.bus.async_fire(
-                    EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
-                    {
-                        "name": f"Call Answered Elsewhere ({calling_module_name})",
-                        "module_id": calling_module_id,
-                    },
-                )
-            elif rtc_event_type == "terminate":
-                self._end_call_session(calling_module_id, reason="terminate")
-                new_event_type = EVENT_TYPE_TERMINATED
-                log_message = f"Call terminated/hung up for module {calling_module_id}"
-                # Dispatch signal to turn off binary sensor
-                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
-                # Fire Logbook event
-                self.hass.bus.async_fire(
-                    EVENT_LOGBOOK_TERMINATED,
-                    {
-                        "name": f"Call Terminated ({calling_module_name})",
-                        "module_id": calling_module_id,
-                    },
-                )
-
-            if new_event_type:
-                _LOGGER.info(log_message)
-
-                # Extract subevents from the original message if available
-                # session_data was already extracted: extra_params.get("data", {}).get("session_description", {})
-                subevents_data = session_data.get("subevents")
-
-                # If the RTC event has no image subevents, preserve any that
-                # were already stored by an earlier incoming_call push.
-                if not subevents_data:
-                    existing = self.data.get(DATA_LAST_EVENT, {}).get("subevents")
-                    if existing:
-                        subevents_data = existing
-
-                # Update last event data
-                self.data[DATA_LAST_EVENT] = {
-                    "type": new_event_type,
-                    "timestamp": datetime.now(UTC),  # This is the time HA processed the event
-                    "time": session_data.get("time"),  # Add original event time if available
-                    "module_id": calling_module_id,
-                    "module_name": calling_module_name,
-                    "subevents": subevents_data,  # Include extracted subevents
-                    "raw_event": message,  # Keep raw_event for deeper debugging if needed
-                    # Potentially copy other relevant fields from session_data directly
-                    "session_id": session_data.get("session_id"),
-                    "video_status": session_data.get("video_status"),  # Example
-                }
-                _LOGGER.debug("Updated last event data (full structure): %s", self.data[DATA_LAST_EVENT])
-                updated = True
-
-        # --- Handle other specific push_types if necessary ---
-        # elif push_type == "some_other_type":
-        #    ... handle specific state changes ...
-        #    updated = True
-
-        # --- Generic State Update (Only if no specific handler updated data) ---
-        # This is less likely needed now but kept for potential future use
-        # Avoid overwriting data handled by specific handlers above
-        if not updated and isinstance(extra_params.get("data"), dict):
-            possible_state_data = extra_params["data"]
-            # Check only if it's NOT an RTC event we already handled
-            if rtc_event_type not in ["call", "rescind", "terminate"]:
-                for key, value in possible_state_data.items():
-                    # Avoid overwriting complex structures or already handled types
-                    if (
-                        key not in ["session_description", "modules", "type"]
-                        and isinstance(value, str | int | float | bool)
-                        and current_module_data.get(key) != value
-                    ):
-                        _LOGGER.debug(
-                            "Updating module %s key '%s' from %s to %s via websocket (generic)",
-                            module_id,
-                            key,
-                            current_module_data.get(key),
-                            value,
-                        )
-                        current_module_data[key] = value
-                        module_updated = True
-
-        if module_updated:
-            updated = True
-
-        return updated
+    def _update_last_event(
+        self,
+        event_type: str,
+        module_id: str,
+        module_name: str,
+        message: dict[str, Any],
+        extra_params: dict[str, Any],
+    ) -> None:
+        """Update the last event data from an RTC event."""
+        self.data[DATA_LAST_EVENT] = {
+            "type": event_type,
+            "timestamp": datetime.now(UTC),
+            "time": extra_params.get("data", {}).get("session_description", {}).get("time"),
+            "module_id": module_id,
+            "module_name": module_name,
+            "session_id": extra_params.get("session_id"),
+        }
 
     def _end_call_session(self, module_id: str, reason: str) -> None:
         """Close an active call session and cancel its watchdog."""

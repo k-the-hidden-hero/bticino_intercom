@@ -22,6 +22,8 @@ DEFAULT_NAME = "BTicino Classe 100X/300X"
 EVENT_TYPE_INCOMING_CALL = "incoming_call"
 EVENT_TYPE_ANSWERED_ELSEWHERE = "answered_elsewhere"
 EVENT_TYPE_TERMINATED = "terminated"
+EVENT_TYPE_MISSED_CALL = "missed_call"
+EVENT_TYPE_ACCEPTED_CALL = "accepted_call"
 
 # Module Types (Based on Variant Subtype)
 SUBTYPE_DOORLOCK = "bndl_doorlock"
@@ -47,6 +49,8 @@ SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
 EVENT_LOGBOOK_INCOMING_CALL = f"{DOMAIN}_incoming_call"
 EVENT_LOGBOOK_ANSWERED_ELSEWHERE = f"{DOMAIN}_answered_elsewhere"
 EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
+EVENT_LOGBOOK_MISSED_CALL = f"{DOMAIN}_missed_call"
+EVENT_LOGBOOK_ACCEPTED_CALL = f"{DOMAIN}_accepted_call"
 
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"

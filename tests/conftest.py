@@ -1,299 +1,235 @@
-"""Fixtures for BTicino Intercom tests."""
+"""Shared fixtures for BTicino Intercom tests."""
 
-from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bticino_intercom.const import DOMAIN
+from custom_components.bticino_intercom.coordinator import BticinoIntercomCoordinator
 
-# --- Test data constants ---
+# --- Constants matching real captured data ---
 
-BRIDGE_MAC = "AA:BB:CC:DD:EE:FF"
-HOME_ID = "home_test_123"
-HOME_NAME = "Casa Test"
-LOCK_MODULE_ID = "module_lock_1"
-LIGHT_MODULE_ID = "module_light_1"
-EXT_UNIT_MODULE_ID = "module_ext_unit_1"
+HOME_ID = "67bdb3ed5b5e8e648a0b80f6"
+BRIDGE_MAC = "00:03:50:d9:a6:3b"
+EXTERNAL_UNIT_ID = "d9a63b-a06f-2ef633a2f733"
+EXTERNAL_UNIT_NAME = "Citofono Strada"
+DOORLOCK_ID = "d9a63b-a06f-2ef633a2f785"
+STAIRCASE_LIGHT_ID = "d9a63b-0560-2ef633a2f7d3"
+SESSION_ID = "5ba94f7d-b300-4d8e-9508-13c3424b8034"
 
-
-def _build_modules_data() -> dict:
-    """Build a realistic modules dictionary for coordinator data."""
-    return {
-        BRIDGE_MAC: {
-            "id": BRIDGE_MAC,
-            "type": "BNCX",
-            "firmware_name": "2.1.0",
-            "firmware_revision": 42,
-            "name": "Bridge",
-            "uptime": 86400,
-            "wifi_strength": 65,
-            "websocket_connected": True,
-            "local_ipv4": "192.168.1.100",
-            "last_configs_update": 1700000000,
-            "last_seen": 1700000000,
-            "reachable": True,
-        },
-        LOCK_MODULE_ID: {
-            "id": LOCK_MODULE_ID,
-            "type": "BNDL",
-            "variant": "xxx:bndl_doorlock",
-            "name": "Front Door Lock",
-            "bridge": BRIDGE_MAC,
-            "lock": True,
-            "reachable": True,
-            "configured": True,
-            "firmware_revision": "1.0",
-            "uptime": 3600,
-            "last_user_interaction": 1700000000,
-            "appliance_type": "doorlock",
-        },
-        EXT_UNIT_MODULE_ID: {
-            "id": EXT_UNIT_MODULE_ID,
-            "type": "BNEU",
-            "variant": "xxx:bneu_external_unit",
-            "name": "Front Door",
-            "bridge": BRIDGE_MAC,
-            "reachable": True,
-            "configured": True,
-            "firmware_revision": "1.0",
-            "uptime": 3600,
-        },
-        LIGHT_MODULE_ID: {
-            "id": LIGHT_MODULE_ID,
-            "type": "BNSL",
-            "variant": "xxx:bnsl_staircase_light",
-            "name": "Staircase Light",
-            "bridge": BRIDGE_MAC,
-            "status": "off",
-            "reachable": True,
-            "configured": True,
-            "firmware_revision": "1.0",
-            "uptime": 3600,
-        },
-    }
-
-
-def _build_coordinator_data() -> dict:
-    """Build complete coordinator data."""
-    return {
-        "homes": {
-            HOME_ID: {
-                "id": HOME_ID,
-                "name": HOME_NAME,
-            },
-        },
-        "modules": _build_modules_data(),
-        "events_history": {
-            HOME_ID: [
-                {
-                    "id": "evt_1",
-                    "type": "call",
-                    "module_id": EXT_UNIT_MODULE_ID,
-                    "time": 1700000000,
-                    "end": 1700000060,
-                    "subevents": [
-                        {
-                            "type": "missed_call",
-                            "time": 1700000050,
-                            "message": "Missed call",
-                            "snapshot": {
-                                "url": "https://example.com/snapshot.jpg",
-                                "expires_at": 1700100000,
-                            },
-                            "vignette": {
-                                "url": "https://example.com/vignette.jpg",
-                                "expires_at": 1700100000,
-                            },
-                        }
-                    ],
-                },
-            ],
-        },
-        "last_event": {},
-    }
-
-
-# --- Fixtures ---
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    """Enable custom integrations in all tests."""
-    yield
+# Aliases used by other test modules
+EXT_UNIT_MODULE_ID = EXTERNAL_UNIT_ID
+LOCK_MODULE_ID = DOORLOCK_ID
+LIGHT_MODULE_ID = STAIRCASE_LIGHT_ID
 
 
 @pytest.fixture
 def mock_config_entry() -> MockConfigEntry:
-    """Return a mock config entry."""
+    """Create a mock config entry."""
     return MockConfigEntry(
         domain=DOMAIN,
-        title=HOME_NAME,
-        data={
-            "username": "user@example.com",
-            "password": "secret123",
-            "home_id": HOME_ID,
-        },
-        options={"light_as_lock": False},
-        unique_id="user@example.com",
-        version=1,
+        title="BTicino Test",
+        data={"home_id": HOME_ID},
+        unique_id=HOME_ID,
     )
 
 
 @pytest.fixture
-def mock_config_entry_light_as_lock() -> MockConfigEntry:
-    """Return a mock config entry with light_as_lock enabled."""
-    return MockConfigEntry(
-        domain=DOMAIN,
-        title=HOME_NAME,
-        data={
-            "username": "user@example.com",
-            "password": "secret123",
-            "home_id": HOME_ID,
+def mock_modules_data() -> dict[str, Any]:
+    """Return module data matching the real topology."""
+    return {
+        BRIDGE_MAC: {
+            "id": BRIDGE_MAC,
+            "type": "BNC1",
+            "name": "BTicino Intercom",
+            "firmware_name": "1.2.3",
+            "reachable": True,
+            "variant": "BNC1:bnc1_bridge",
         },
-        options={"light_as_lock": True},
-        unique_id="user@example.com",
-        version=1,
-    )
+        EXTERNAL_UNIT_ID: {
+            "id": EXTERNAL_UNIT_ID,
+            "type": "BNEU",
+            "name": EXTERNAL_UNIT_NAME,
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+            "variant": "BNEU:bneu_external_unit",
+        },
+        DOORLOCK_ID: {
+            "id": DOORLOCK_ID,
+            "type": "BNDL",
+            "name": "Porta Esterna",
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+            "variant": "BNDL:bndl_doorlock",
+        },
+        STAIRCASE_LIGHT_ID: {
+            "id": STAIRCASE_LIGHT_ID,
+            "type": "BNSL",
+            "name": "Luci Scale",
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+            "variant": "BNSL:bnsl_staircase_light",
+        },
+    }
 
 
 @pytest.fixture
-def mock_auth_handler() -> Generator[AsyncMock]:
-    """Mock the pybticino AuthHandler."""
-    with patch(
-        "custom_components.bticino_intercom.AuthHandler",
-        autospec=True,
-    ) as mock_auth_class:
-        mock_auth = mock_auth_class.return_value
-        mock_auth.get_access_token = AsyncMock(return_value="mock-access-token")
-        mock_auth.close_session = AsyncMock()
-        yield mock_auth
-
-
-@pytest.fixture
-def mock_account() -> Generator[AsyncMock]:
-    """Mock the pybticino AsyncAccount."""
-    with patch(
-        "custom_components.bticino_intercom.AsyncAccount",
-        autospec=True,
-    ) as mock_account_class:
-        mock_acct = mock_account_class.return_value
-
-        # Build mock home with modules
-        mock_bridge = MagicMock()
-        mock_bridge.id = BRIDGE_MAC
-        mock_bridge.raw_data = _build_modules_data()[BRIDGE_MAC]
-
-        mock_lock = MagicMock()
-        mock_lock.id = LOCK_MODULE_ID
-        mock_lock.raw_data = _build_modules_data()[LOCK_MODULE_ID]
-
-        mock_ext_unit = MagicMock()
-        mock_ext_unit.id = EXT_UNIT_MODULE_ID
-        mock_ext_unit.raw_data = _build_modules_data()[EXT_UNIT_MODULE_ID]
-
-        mock_light = MagicMock()
-        mock_light.id = LIGHT_MODULE_ID
-        mock_light.raw_data = _build_modules_data()[LIGHT_MODULE_ID]
-
-        mock_home = MagicMock()
-        mock_home.id = HOME_ID
-        mock_home.name = HOME_NAME
-        mock_home.raw_data = {"id": HOME_ID, "name": HOME_NAME}
-        mock_home.modules = [mock_bridge, mock_lock, mock_ext_unit, mock_light]
-
-        mock_acct.homes = {HOME_ID: mock_home}
-        mock_acct.async_update_topology = AsyncMock()
-        mock_acct.async_get_home_status = AsyncMock(
-            return_value={
-                "body": {
-                    "home": {
-                        "modules": [
-                            {"id": LOCK_MODULE_ID, "lock": True},
-                            {"id": LIGHT_MODULE_ID, "status": "off"},
-                        ]
-                    }
-                }
-            }
-        )
-        mock_acct.async_get_events = AsyncMock(
-            return_value={
-                "body": {
-                    "home": {
-                        "events": [
-                            {
-                                "id": "evt_1",
-                                "type": "call",
-                                "module_id": EXT_UNIT_MODULE_ID,
-                                "time": 1700000000,
-                                "end": 1700000060,
-                                "subevents": [
-                                    {
-                                        "type": "missed_call",
-                                        "time": 1700000050,
-                                        "message": "Missed call",
-                                        "snapshot": {
-                                            "url": "https://example.com/snapshot.jpg",
-                                            "expires_at": 1700100000,
-                                        },
-                                        "vignette": {
-                                            "url": "https://example.com/vignette.jpg",
-                                            "expires_at": 1700100000,
-                                        },
-                                    }
-                                ],
-                            },
-                        ]
-                    }
-                }
-            }
-        )
-        mock_acct.async_set_module_state = AsyncMock()
-
-        yield mock_acct
-
-
-@pytest.fixture
-def mock_websocket_client() -> Generator[MagicMock]:
-    """Mock the pybticino WebsocketClient."""
-    with patch(
-        "custom_components.bticino_intercom.WebsocketClient",
-        autospec=True,
-    ) as mock_ws_class:
-        mock_ws = mock_ws_class.return_value
-        mock_ws.connect = AsyncMock()
-        mock_ws.disconnect = AsyncMock()
-        mock_ws.get_listener_task = MagicMock(return_value=None)
-        yield mock_ws
-
-
-@pytest.fixture
-async def mock_setup_entry(
+def coordinator(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_auth_handler: AsyncMock,
-    mock_account: AsyncMock,
-    mock_websocket_client: MagicMock,
-) -> MockConfigEntry:
-    """Set up the integration with mocked dependencies."""
+    mock_modules_data: dict[str, Any],
+) -> BticinoIntercomCoordinator:
+    """Create a coordinator with pre-populated module data."""
     mock_config_entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-    return mock_config_entry
+
+    mock_account = AsyncMock()
+    mock_ws_client = AsyncMock()
+
+    coord = BticinoIntercomCoordinator(
+        hass=hass,
+        entry=mock_config_entry,
+        account=mock_account,
+        websocket_client=mock_ws_client,
+    )
+
+    # Pre-populate data as if a successful poll had already occurred
+    coord.data = {
+        "homes": {HOME_ID: {"name": "Casella"}},
+        "modules": mock_modules_data,
+        "last_event": {},
+        "events_history": {HOME_ID: []},
+    }
+    coord._main_device_id = BRIDGE_MAC
+    coord._home_name = "Casella"
+
+    return coord
+
+
+# --- WebSocket event fixtures (from real captured data) ---
 
 
 @pytest.fixture
-async def mock_setup_entry_light_as_lock(
-    hass: HomeAssistant,
-    mock_config_entry_light_as_lock: MockConfigEntry,
-    mock_auth_handler: AsyncMock,
-    mock_account: AsyncMock,
-    mock_websocket_client: MagicMock,
-) -> MockConfigEntry:
-    """Set up the integration with light_as_lock enabled."""
-    mock_config_entry_light_as_lock.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(mock_config_entry_light_as_lock.entry_id)
-    await hass.async_block_till_done()
-    return mock_config_entry_light_as_lock
+def ws_rtc_offer() -> dict[str, Any]:
+    """RTC offer event (Format A) — incoming call with SDP."""
+    return {
+        "push_type": "BNC1-rtc",
+        "extra_params": {
+            "tag_id": "dgo4dB6RqEk=",
+            "correlation_id": "1499514006757899539",
+            "session_id": SESSION_ID,
+            "data": {
+                "type": "offer",
+                "session_description": {
+                    "type": "call",
+                    "sdp": "v=0\r\no=- 123 0 IN IP4 0.0.0.0\r\ns=-\r\n",
+                    "module_id": EXTERNAL_UNIT_ID,
+                    "modules": [
+                        {"type": "BNEU", "id": EXTERNAL_UNIT_ID, "name": EXTERNAL_UNIT_NAME},
+                        {"type": "BNDL", "id": DOORLOCK_ID, "name": "Porta Esterna"},
+                    ],
+                },
+            },
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+        },
+    }
+
+
+@pytest.fixture
+def ws_rtc_terminate() -> dict[str, Any]:
+    """RTC terminate event (Format A) — no session_description."""
+    return {
+        "push_type": "BNC1-rtc",
+        "extra_params": {
+            "tag_id": "EWilQ7ZfZr8=",
+            "correlation_id": "9875885496113046747",
+            "session_id": SESSION_ID,
+            "data": {
+                "type": "terminate",
+            },
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+        },
+    }
+
+
+@pytest.fixture
+def ws_rtc_rescind() -> dict[str, Any]:
+    """RTC rescind event (Format A) — call answered elsewhere, no session_description."""
+    return {
+        "push_type": "BNC1-rtc",
+        "extra_params": {
+            "tag_id": "TEZ/E0cg8pk=",
+            "correlation_id": "6607934281568223233",
+            "session_id": SESSION_ID,
+            "data": {
+                "type": "rescind",
+            },
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+        },
+    }
+
+
+@pytest.fixture
+def ws_incoming_call() -> dict[str, Any]:
+    """Status incoming_call event (Format B) — with snapshot URLs."""
+    return {
+        "push_type": "BNC1-incoming_call",
+        "extra_params": {
+            "event_type": "incoming_call",
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+            "home_name": "Casella",
+            "timestamp": 1774877242,
+            "camera_id": BRIDGE_MAC,
+            "event_id": "69ca7a3aeeefc6e8a1cf8cef",
+            "subevent_id": "69ca7a3a59c54a2c490395f4",
+            "snapshot_url": "https://example.com/snapshot.jpg",
+            "vignette_url": "https://example.com/vignette.jpg",
+            "session_id": SESSION_ID,
+        },
+    }
+
+
+@pytest.fixture
+def ws_missed_call() -> dict[str, Any]:
+    """Status missed_call event (Format B)."""
+    return {
+        "push_type": "BNC1-missed_call",
+        "extra_params": {
+            "event_type": "missed_call",
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+            "home_name": "Casella",
+            "timestamp": 1774877268,
+            "camera_id": BRIDGE_MAC,
+            "event_id": "69ca7a3aeeefc6e8a1cf8cef",
+            "subevent_id": "69ca7a541d2e1e08640ff8ba",
+            "session_id": SESSION_ID,
+        },
+    }
+
+
+@pytest.fixture
+def ws_accepted_call() -> dict[str, Any]:
+    """Status accepted_call event (Format B)."""
+    return {
+        "push_type": "BNC1-accepted_call",
+        "extra_params": {
+            "event_type": "accepted_call",
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+            "home_name": "Casella",
+            "timestamp": 1774877289,
+            "camera_id": BRIDGE_MAC,
+            "event_id": "69ca7a5fa249cd0e436e9bc4",
+            "subevent_id": "69ca7a69b130821bfe0d2516",
+            "session_id": "f26a5d46-9670-45f7-98b9-c2362c0729d7",
+        },
+    }
