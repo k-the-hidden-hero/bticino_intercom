@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -34,7 +34,11 @@ def mock_config_entry() -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title="BTicino Test",
-        data={"home_id": HOME_ID},
+        data={
+            "home_id": HOME_ID,
+            "username": "test@example.com",
+            "password": "testpass",
+        },
         unique_id=HOME_ID,
     )
 
@@ -233,3 +237,62 @@ def ws_accepted_call() -> dict[str, Any]:
             "session_id": "f26a5d46-9670-45f7-98b9-c2362c0729d7",
         },
     }
+
+
+@pytest.fixture
+async def mock_setup_entry(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_modules_data: dict[str, Any],
+    enable_custom_integrations: None,
+) -> MockConfigEntry:
+    """Set up the integration with mocked pybticino."""
+    mock_config_entry.add_to_hass(hass)
+
+    mock_account = AsyncMock()
+    mock_account.homes = {
+        HOME_ID: MagicMock(
+            id=HOME_ID,
+            name="Test Home",
+            raw_data={"name": "Test Home", "id": HOME_ID},
+            modules=[MagicMock(id=mid, raw_data=mdata) for mid, mdata in mock_modules_data.items()],
+        )
+    }
+    mock_account.async_update_topology = AsyncMock()
+    mock_account.async_get_home_status = AsyncMock(
+        return_value={
+            "body": {"home": {"modules": list(mock_modules_data.values())}},
+        }
+    )
+    mock_account.async_get_events = AsyncMock(
+        return_value={
+            "body": {"home": {"events": []}},
+        }
+    )
+    mock_account.async_get_turn_servers = AsyncMock(return_value=[])
+
+    mock_auth = AsyncMock()
+    mock_auth.get_access_token = AsyncMock(return_value="fake_token")
+    mock_auth.set_tokens = MagicMock()
+
+    mock_ws = AsyncMock()
+    mock_ws.connect = AsyncMock()
+    mock_ws.disconnect = AsyncMock()
+    mock_ws.get_listener_task = MagicMock(return_value=None)
+
+    mock_signaling = AsyncMock()
+    mock_signaling.is_connected = False
+
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_ws),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    return mock_config_entry
