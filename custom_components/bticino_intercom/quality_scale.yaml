@@ -1,0 +1,106 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: Integration does not register custom actions.
+  appropriate-polling: done
+  brands: done
+  common-modules: done
+  config-flow-test-coverage:
+    status: todo
+    comment: Config flow tests not yet comprehensive.
+  config-flow: done
+  dependency-transparency: done
+  docs-actions:
+    status: exempt
+    comment: No custom actions.
+  docs-high-level-description:
+    status: todo
+    comment: README exists but not in HA docs format.
+  docs-installation-instructions:
+    status: todo
+    comment: README has HACS installation instructions.
+  docs-removal-instructions:
+    status: todo
+    comment: Standard HA removal, not yet documented.
+  entity-event-setup:
+    status: exempt
+    comment: No event entities.
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data:
+    status: todo
+    comment: Uses hass.data dict pattern instead of runtime_data.
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: No custom actions.
+  config-entry-unloading: done
+  docs-configuration-parameters:
+    status: todo
+    comment: light_as_lock option not documented in HA format.
+  docs-troubleshooting:
+    status: todo
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage:
+    status: todo
+    comment: Partial test coverage, expanding.
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery:
+    status: exempt
+    comment: Cloud-only integration, no local discovery.
+  discovery-update-info:
+    status: exempt
+    comment: Cloud-only integration.
+  docs-data-update:
+    status: todo
+  docs-examples:
+    status: todo
+  docs-known-limitations:
+    status: todo
+  docs-supported-devices:
+    status: todo
+  docs-supported-functions:
+    status: todo
+  docs-use-cases:
+    status: todo
+  dynamic-devices:
+    status: exempt
+    comment: Devices are fixed per home topology.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default:
+    status: todo
+    comment: All entities enabled by default.
+  entity-translations: done
+  exception-translations:
+    status: todo
+  icon-translations:
+    status: todo
+  reconfigure-flow:
+    status: todo
+    comment: Not yet implemented.
+  repair-issues:
+    status: exempt
+    comment: No repair issues needed currently.
+  stale-devices:
+    status: exempt
+    comment: Devices are fixed per home topology.
+
+  # Platinum
+  async-dependency: done
+  inject-websession: done
+  strict-typing:
+    status: todo
+    comment: No py.typed marker or type stubs.

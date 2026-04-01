@@ -9,6 +9,13 @@
           "password": "Password"
         }
       },
+      "reauth_confirm": {
+        "title": "Re-authenticate BTicino",
+        "description": "The credentials for {username} have expired. Please enter your password.",
+        "data": {
+          "password": "Password"
+        }
+      },
       "select_home": {
         "title": "Select BTicino Home",
         "description": "Multiple homes found for your account. Please select the home you want to add.",
@@ -24,7 +31,8 @@
     },
     "abort": {
       "already_configured": "Account is already configured.",
-      "no_homes_found": "No homes found for this BTicino account."
+      "no_homes_found": "No homes found for this BTicino account.",
+      "reauth_successful": "Re-authentication successful"
     }
   },
   "options": {
