@@ -4,9 +4,9 @@
 > event entity migration, and two-way audio in the BTicino Intercom integration.
 > Written to be self-contained — a new session can pick this up without prior context.
 >
-> **Date**: 2026-04-01
+> **Date**: 2026-04-01 (updated end of session)
 > **Branch**: `dev/webrtc` (based on `main` v1.9.2)
-> **Status**: WebRTC signaling validated end-to-end, implementation in progress
+> **Status**: WebRTC code complete, event entity done, 107 tests green. Blocked on real device test.
 
 ---
 
@@ -36,11 +36,13 @@
 - **Reauth flow**, diagnostics endpoint, quality_scale.yaml
 - **92 tests** passing
 
-### What exists on `dev/webrtc` (WIP, uncommitted → committed as WIP)
+### What exists on `dev/webrtc` (committed and pushed)
 
 - `SignalingClient` in pybticino — connects to `wss://app-ws.netatmo.net/appws/`
-- Camera entity with `async_handle_async_webrtc_offer` skeleton
-- Enhanced coordinator event processing
+- Camera entity with full `async_handle_async_webrtc_offer` (ICE buffering, error handling, terminate)
+- Enhanced coordinator event processing (RTC offer/rescind/terminate + status events)
+- **Event entity** (`event.py`) with `EventDeviceClass.DOORBELL` alongside binary_sensor
+- **107 tests green**, lint clean, full mock_setup_entry fixture
 - **Signaling validated**: offer sent to Netatmo server, ack received, session established
 - Device responded "Max number of peers reached" (not a bug — other sessions were active)
 
@@ -609,31 +611,33 @@ homeassistant/components/unifiprotect/event.py         — dual event+binary_sen
 
 ## 11. Remaining Work Checklist
 
+> **Last updated**: 2026-04-01 end of session
+
 ### Phase 1: WebRTC Live Video (core)
 
 - [ ] Test WebRTC offer with free device (no other active sessions)
 - [ ] Capture and log raw SDP answer from Netatmo
-- [ ] Implement `async_handle_async_webrtc_offer` fully in camera.py
+- [x] ~~Implement `async_handle_async_webrtc_offer` fully in camera.py~~ (done: camera.py with full signaling flow, ICE buffering, error handling)
 - [ ] Determine ICE strategy (vanilla vs trickle) based on Netatmo's SDP answer
-- [ ] Implement `close_webrtc_session` with terminate signaling
-- [ ] Add session tracking dict
+- [x] ~~Implement `close_webrtc_session` with terminate signaling~~ (done: sends terminate via SignalingClient)
+- [x] ~~Add session tracking~~ (done: via SignalingClient session_id)
 - [ ] Test end-to-end: browser → HA → Netatmo → video playing
 
 ### Phase 2: Robustness
 
 - [ ] Implement SDP answer fixing if needed (based on Phase 1 observations)
 - [ ] Add session refresh/keepalive mechanism
-- [ ] Handle `WebRTCError` for error cases (max peers, device offline, etc.)
+- [x] ~~Handle `WebRTCError` for error cases~~ (done: on_event callback sends WebRTCError to frontend)
 - [ ] Implement `_async_get_webrtc_client_configuration` with STUN/TURN if needed
 - [ ] Find correct TURN endpoint (or confirm it's not needed in LAN)
 
 ### Phase 3: Event Entity
 
-- [ ] Create `event.py` with `BticinoDoorbellEvent` (EventDeviceClass.DOORBELL)
-- [ ] Wire to `SIGNAL_CALL_RECEIVED` dispatcher
-- [ ] Add to PLATFORMS in const.py
-- [ ] Keep binary_sensor for backwards compat (dual entity like UniFi)
-- [ ] Use `terminate` WS event as primary reset for binary_sensor
+- [x] ~~Create `event.py` with `BticinoDoorbellEvent` (EventDeviceClass.DOORBELL)~~ (done: 2026-04-01)
+- [x] ~~Wire to `SIGNAL_CALL_RECEIVED` dispatcher~~ (done: fires "ring" on state=True)
+- [x] ~~Add to PLATFORMS in const.py~~ (done: Platform.EVENT added)
+- [x] ~~Keep binary_sensor for backwards compat (dual entity like UniFi)~~ (done: both coexist)
+- [ ] Use `terminate` WS event as primary reset for binary_sensor (currently uses 30s timeout)
 
 ### Phase 4: Two-Way Audio
 
@@ -647,6 +651,13 @@ homeassistant/components/unifiprotect/event.py         — dual event+binary_sen
 - [ ] Update README with WebRTC/live video documentation
 - [ ] Test on production HA (dev tag first, then final)
 - [ ] Update pybticino if signaling changes needed
+
+### Test Infrastructure (added 2026-04-01)
+
+- [x] ~~`mock_setup_entry` fixture in conftest.py~~ (done: full integration setup with all mocks)
+- [x] ~~107 tests green, lint clean~~ (done: coordinator, camera, binary_sensor, event, sensor, lock, light, integration, config_flow, init, token_persistence, webrtc_camera)
+- [x] ~~Event entity tests~~ (done: 4 tests in test_event.py)
+- [x] ~~WebRTC camera tests~~ (done: 3 tests in test_webrtc_camera.py)
 
 ---
 
