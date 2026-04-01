@@ -31,11 +31,11 @@ class TestExtractImageFromEvent:
             "snapshot_url": "https://example.com/snapshot.jpg",
             "vignette_url": "https://example.com/vignette.jpg",
         }
-        url, expires, time = cam._extract_image_from_event(event)
+        url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url == "https://example.com/snapshot.jpg"
-        assert expires is None  # WS events don't include expiry
-        assert time == 1774877242
+        assert _expires is None  # WS events don't include expiry
+        assert _time == 1774877242
 
     def test_ws_status_event_vignette_url(self) -> None:
         """WS Format B event with direct vignette_url."""
@@ -46,10 +46,10 @@ class TestExtractImageFromEvent:
             "snapshot_url": "https://example.com/snapshot.jpg",
             "vignette_url": "https://example.com/vignette.jpg",
         }
-        url, expires, time = cam._extract_image_from_event(event)
+        url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url == "https://example.com/vignette.jpg"
-        assert time == 1774877242
+        assert _time == 1774877242
 
     def test_api_history_event_with_subevents(self) -> None:
         """API history event with nested subevents[0].snapshot.url."""
@@ -72,11 +72,11 @@ class TestExtractImageFromEvent:
                 }
             ],
         }
-        url, expires, time = cam._extract_image_from_event(event)
+        url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url == "https://blob.example.com/snapshot_from_api.jpg"
-        assert expires == 1774880842
-        assert time == 1774877242
+        assert _expires == 1774880842
+        assert _time == 1774877242
 
     def test_api_history_event_vignette(self) -> None:
         """API history event — extracting vignette instead of snapshot."""
@@ -93,10 +93,10 @@ class TestExtractImageFromEvent:
                 }
             ],
         }
-        url, expires, time = cam._extract_image_from_event(event)
+        url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url == "https://example.com/vig.jpg"
-        assert expires == 200
+        assert _expires == 200
 
     def test_event_with_no_image_data(self) -> None:
         """Event without any image data returns None."""
@@ -105,11 +105,11 @@ class TestExtractImageFromEvent:
             "type": "connection",
             "time": 1774877000,
         }
-        url, expires, time = cam._extract_image_from_event(event)
+        url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url is None
-        assert expires is None
-        assert time == 1774877000
+        assert _expires is None
+        assert _time == 1774877000
 
     def test_ws_snapshot_url_takes_priority_over_subevents(self) -> None:
         """If both direct URL and subevents exist, direct URL wins."""
@@ -123,6 +123,6 @@ class TestExtractImageFromEvent:
                 }
             ],
         }
-        url, expires, time = cam._extract_image_from_event(event)
+        url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url == "https://example.com/direct.jpg"
