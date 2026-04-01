@@ -26,6 +26,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 from pybticino import AsyncAccount, AuthHandler, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
@@ -44,6 +45,7 @@ WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
 START_LISTENER_REMOVE_KEY = "start_listener_remove"
+TOKEN_STORAGE_VERSION = 1
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -52,15 +54,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     password = entry.data[CONF_PASSWORD]
 
     session = async_get_clientsession(hass)
-    # Remove client_id and client_secret from AuthHandler call
+
+    # Set up token persistence via HA Store
+    token_store = Store(hass, TOKEN_STORAGE_VERSION, f"{DOMAIN}.tokens.{entry.entry_id}")
+
+    async def _save_tokens(token_data: dict) -> None:
+        """Persist tokens to HA storage when they change."""
+        await token_store.async_save(token_data)
+        _LOGGER.debug("Tokens persisted to storage")
+
     auth_handler = AuthHandler(
         username=username,
         password=password,
         session=session,
+        token_callback=_save_tokens,
     )
+
+    # Restore previously saved tokens to avoid a full login
+    saved_tokens = await token_store.async_load()
+    if saved_tokens:
+        _LOGGER.debug("Restoring saved tokens from storage")
+        auth_handler.set_tokens(
+            access_token=saved_tokens["access_token"],
+            refresh_token=saved_tokens["refresh_token"],
+            expires_at=saved_tokens.get("expires_at"),
+        )
 
     try:
         # Validate credentials by attempting to get a token
+        # With restored tokens this will use refresh instead of full auth
         await auth_handler.get_access_token()
     except AuthError as err:
         _LOGGER.error("Authentication failed: %s", err)
@@ -333,7 +355,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry when options change."""
     _LOGGER.info("Reloading BTicino integration entry due to options update: %s", entry.entry_id)
-    # Explicitly call the reload function to ensure the unload/setup cycle runs
     await hass.config_entries.async_reload(entry.entry_id)
-    # The listener registration itself ensures this function is called.
-    # The call above forces HA to unload and set up the entry again.
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clean up stored tokens when an entry is permanently removed."""
+    token_store = Store(hass, TOKEN_STORAGE_VERSION, f"{DOMAIN}.tokens.{entry.entry_id}")
+    await token_store.async_remove()
+    _LOGGER.debug("Removed stored tokens for entry %s", entry.entry_id)
