@@ -41,6 +41,7 @@ _LOGGER = logging.getLogger(__name__)
 RECONNECT_DELAY = 30  # Default delay, overridden by smart backoff
 BOOT_RETRY_DELAYS = [5, 10, 30, 30, 30, 60]  # Backoff al boot
 RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
+TOKEN_RESUBSCRIBE_INTERVAL = 3600  # Re-subscribe with fresh token every hour
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
@@ -161,8 +162,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Get the listener task from the client
                     listener_task = websocket_client.get_listener_task()
                     if listener_task:
-                        # Wait for the listener task, but periodically check for stale WS
+                        # Monitor loop: check stale WS + proactive re-subscribe
                         _LOGGER.debug("Waiting for WebSocket listener task to complete...")
+                        last_resubscribe = asyncio.get_running_loop().time()
                         while not listener_task.done():
                             try:
                                 await asyncio.wait_for(asyncio.shield(listener_task), timeout=60)
@@ -170,14 +172,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 # Check if coordinator flagged WS as stale
                                 if coordinator.ws_stale:
                                     _LOGGER.warning("WebSocket flagged as stale by coordinator, forcing reconnect")
-                                    # Reset stale state so we don't immediately re-flag after reconnect
                                     coordinator._ws_stale = False
                                     coordinator._last_ws_message_time = None
                                     listener_task.cancel()
                                     with suppress(asyncio.CancelledError):
                                         await listener_task
                                     break
-                                # Otherwise keep waiting
+
+                                # Proactive re-subscribe to keep session alive
+                                elapsed = asyncio.get_running_loop().time() - last_resubscribe
+                                if elapsed >= TOKEN_RESUBSCRIBE_INTERVAL:
+                                    try:
+                                        _LOGGER.info("Re-subscribing with fresh token (%.0fs elapsed)...", elapsed)
+                                        await websocket_client.resubscribe()
+                                        last_resubscribe = asyncio.get_running_loop().time()
+                                        _LOGGER.info("Re-subscribe successful, connection kept alive.")
+                                    except Exception:
+                                        _LOGGER.warning("Re-subscribe failed, forcing reconnect.", exc_info=True)
+                                        listener_task.cancel()
+                                        with suppress(asyncio.CancelledError):
+                                            await listener_task
+                                        break
                             except asyncio.CancelledError:
                                 raise
                         else:

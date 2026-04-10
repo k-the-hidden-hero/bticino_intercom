@@ -202,9 +202,19 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return final_data
 
         except AuthError as err:
+            # Auth errors are critical — must re-authenticate
             raise UpdateFailed(f"Authentication error: {err}") from err
-        except ApiError as err:
-            raise UpdateFailed(f"API error: {err}") from err
+        except (ApiError, TimeoutError, OSError, ConnectionError) as err:
+            # Transient errors: return last known data instead of marking
+            # all entities unavailable. Matches mobile app behavior.
+            if self.data and self.data.get("modules"):
+                _LOGGER.warning(
+                    "Transient error during update (%s: %s), keeping last known data.",
+                    type(err).__name__,
+                    err,
+                )
+                return self.data
+            raise UpdateFailed(f"API error (no previous data): {err}") from err
         except Exception as err:
             _LOGGER.exception("Unexpected error during data fetch")
             raise UpdateFailed(f"Unexpected error: {err}") from err

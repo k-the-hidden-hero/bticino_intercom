@@ -63,18 +63,21 @@ async def test_coordinator_refresh_auth_error(
     assert coordinator.last_update_success is False
 
 
-async def test_coordinator_refresh_api_error(
+async def test_coordinator_refresh_api_error_returns_stale_data(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
     mock_account: AsyncMock,
 ) -> None:
-    """Test coordinator handles API errors during refresh."""
+    """Test coordinator returns last known data on transient API errors."""
     coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
     mock_account.async_update_topology.side_effect = ApiError(500, "Server error")
 
     await coordinator.async_refresh()
 
-    assert coordinator.last_update_success is False
+    # Resilient coordinator: returns stale data, reports success
+    assert coordinator.last_update_success is True
+    assert coordinator.data is not None
+    assert coordinator.data.get("modules") is not None
 
 
 async def test_coordinator_polling_interval(

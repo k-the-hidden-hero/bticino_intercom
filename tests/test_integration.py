@@ -261,47 +261,21 @@ async def test_coordinator_refresh_updates_all_entities(
     assert hass.states.get(light_id).state == STATE_ON
 
 
-async def test_coordinator_api_failure_makes_entities_unavailable(
+async def test_coordinator_api_failure_keeps_entities_available(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
     mock_account: AsyncMock,
 ) -> None:
-    """Test that API failure makes bridge sensors unavailable."""
+    """Test that transient API failure keeps entities with last known data."""
     coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
 
     mock_account.async_update_topology.side_effect = ApiError(500, "Server down")
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
-    # Bridge sensors should become unavailable
+    # Resilient coordinator: entities should stay available with stale data
     uptime_id = next(s for s in hass.states.async_entity_ids(SENSOR_DOMAIN) if "last_boot" in s or "uptime" in s)
-    assert hass.states.get(uptime_id).state == "unavailable"
-
-
-async def test_coordinator_recovers_after_api_failure(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-    mock_account: AsyncMock,
-) -> None:
-    """Test that entities recover when API starts working again."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
-
-    # Fail
-    mock_account.async_update_topology.side_effect = ApiError(500, "Server down")
-    await coordinator.async_refresh()
-    await hass.async_block_till_done()
-
-    uptime_id = next(s for s in hass.states.async_entity_ids(SENSOR_DOMAIN) if "last_boot" in s or "uptime" in s)
-    assert hass.states.get(uptime_id).state == "unavailable"
-
-    # Recover
-    mock_account.async_update_topology.side_effect = None
-    await coordinator.async_refresh()
-    await hass.async_block_till_done()
-
-    state = hass.states.get(uptime_id)
-    assert state.state != "unavailable"
-    # Now a timestamp sensor, just verify it recovered from unavailable
+    assert hass.states.get(uptime_id).state != "unavailable"
 
 
 # ---------------------------------------------------------------------------
