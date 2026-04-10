@@ -170,6 +170,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 # Check if coordinator flagged WS as stale
                                 if coordinator.ws_stale:
                                     _LOGGER.warning("WebSocket flagged as stale by coordinator, forcing reconnect")
+                                    # Reset stale state so we don't immediately re-flag after reconnect
+                                    coordinator._ws_stale = False
+                                    coordinator._last_ws_message_time = None
                                     listener_task.cancel()
                                     with suppress(asyncio.CancelledError):
                                         await listener_task
