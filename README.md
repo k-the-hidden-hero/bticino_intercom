@@ -149,7 +149,9 @@ When someone rings your doorbell, the event is delivered via WebSocket in under 
 
 As a fallback, the integration also polls the API every 5 minutes. If the WebSocket connection drops, it automatically reconnects with an exponential backoff strategy.
 
-A **watchdog** monitors WebSocket health: if no messages are received for 10 minutes, the connection is flagged as stale and forcefully reconnected.
+To keep the connection alive, the integration **re-subscribes every hour** with a refreshed OAuth token on the existing connection — the same approach used by the official Android app. This prevents disconnections from token expiry.
+
+A **watchdog** monitors WebSocket health: if no messages are received for 10 minutes, the connection is flagged as stale and forcefully reconnected. During temporary cloud outages, entities remain available with their last known state instead of going unavailable.
 
 ### Data flow
 
@@ -188,9 +190,9 @@ logger:
 ## Requirements
 
 - Home Assistant 2026.3 or later
-- Python 3.14 or later (included in HA 2026.3+)
+- Home Assistant 2025.x or later (Python 3.13+)
 - A BTicino Classe 100X or 300X connected to the Netatmo cloud
-- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.5.3 (installed automatically)
+- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.7.1 (installed automatically)
 
 ---
 
