@@ -65,3 +65,10 @@ CALL_SENSOR_TIMEOUT = 30
 
 # Camera specific constants
 IMAGE_CACHE_SECONDS = 300  # 5 minutes
+
+# --- Call session tracking ---
+# If no "call" retransmissions arrive within this many seconds, the session
+# is closed (fallback for when rescind/terminate never arrives).
+CALL_RETRANSMIT_WINDOW = 15
+# Absolute cap on session duration, last safety net.
+CALL_SESSION_MAX_DURATION = 180
