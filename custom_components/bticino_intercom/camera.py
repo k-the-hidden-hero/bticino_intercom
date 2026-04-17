@@ -338,6 +338,29 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             return None
 
     @staticmethod
+    def _enable_audio_sendrecv(sdp: str) -> str:
+        """Change audio direction from recvonly to sendrecv in SDP.
+
+        The BTicino device only sends audio when it sees sendrecv in the
+        offer (like the mobile app). With recvonly, the device responds
+        with sendonly but doesn't actually transmit audio data.
+        """
+        lines = sdp.split("\r\n")
+        result = []
+        in_audio = False
+        for line in lines:
+            if line.startswith("m=audio"):
+                in_audio = True
+            elif line.startswith("m="):
+                in_audio = False
+
+            if in_audio and line == "a=recvonly":
+                result.append("a=sendrecv")
+            else:
+                result.append(line)
+        return "\r\n".join(result)
+
+    @staticmethod
     def convert_offer_to_answer_sdp(offer_sdp: str) -> str:
         """Convert a browser SDP offer to be usable as an answer."""
         return offer_sdp.replace("a=setup:actpass", "a=setup:active")
@@ -410,6 +433,10 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             self._signaling._on_answer = on_answer
             self._signaling._on_candidate = on_candidate
             self._signaling._on_event = on_event
+
+            # Enable bidirectional audio — the device only sends audio when
+            # it sees sendrecv (like the mobile app does)
+            offer_sdp = self._enable_audio_sendrecv(offer_sdp)
 
             active_call = self.coordinator.active_call
             if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:

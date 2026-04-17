@@ -128,6 +128,34 @@ class TestExtractImageFromEvent:
         assert url == "https://example.com/direct.jpg"
 
 
+class TestEnableAudioSendrecv:
+    """Test audio direction fix in SDP."""
+
+    def test_audio_recvonly_becomes_sendrecv(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\n"
+        result = BticinoWebRTCCamera._enable_audio_sendrecv(sdp)
+        # Audio should be sendrecv
+        assert "m=audio" in result
+        lines = result.split("\r\n")
+        audio_idx = next(i for i, line in enumerate(lines) if line.startswith("m=audio"))
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        audio_section = lines[audio_idx:video_idx]
+        assert "a=sendrecv" in audio_section
+        # Video should stay recvonly
+        video_section = lines[video_idx:]
+        assert "a=recvonly" in video_section
+
+    def test_video_stays_recvonly(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\n"
+        result = BticinoWebRTCCamera._enable_audio_sendrecv(sdp)
+        assert result.count("a=sendrecv") == 1  # Only audio
+        assert result.count("a=recvonly") == 1  # Only video
+
+
 class TestConvertOfferToAnswerSdp:
     """Tests for BticinoWebRTCCamera.convert_offer_to_answer_sdp static method."""
 
