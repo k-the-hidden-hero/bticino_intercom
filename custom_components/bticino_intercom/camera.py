@@ -317,6 +317,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             _LOGGER.debug("Failed to fetch snapshot for WebRTC camera")
             return None
 
+    @staticmethod
+    def convert_offer_to_answer_sdp(offer_sdp: str) -> str:
+        """Convert a browser SDP offer to be usable as an answer."""
+        return offer_sdp.replace("a=setup:actpass", "a=setup:active")
+
     async def _flush_pending_candidates(self) -> None:
         """Send all buffered ICE candidates now that the session is ready."""
         if not self._pending_candidates:
@@ -382,21 +387,31 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             self._signaling._on_candidate = on_candidate
             self._signaling._on_event = on_event
 
-            # Find the first external unit module_id
-            module_id = None
-            for mid, mdata in self.coordinator.data.get("modules", {}).items():
-                variant = mdata.get("variant", "")
-                if "bneu_external_unit" in variant:
-                    module_id = mid
-                    break
+            active_call = self.coordinator.active_call
+            if active_call and active_call.get("sdp"):
+                # --- Answer mode: respond to the device's incoming call ---
+                _LOGGER.info(
+                    "Answering incoming call (session=%s, device=%s)",
+                    active_call.get("session_id"),
+                    device_id,
+                )
+                answer_sdp = self.convert_offer_to_answer_sdp(offer_sdp)
+                await self._signaling.send_answer(answer_sdp)
+            else:
+                # --- Offer mode: initiate on-demand call ---
+                module_id = None
+                for mid, mdata in self.coordinator.data.get("modules", {}).items():
+                    variant = mdata.get("variant", "")
+                    if "bneu_external_unit" in variant:
+                        module_id = mid
+                        break
 
-            # Send the offer — this blocks until the ack is received
-            _LOGGER.info("Sending WebRTC offer to device %s (module=%s)", device_id, module_id)
-            await self._signaling.send_offer(
-                device_id=device_id,
-                sdp=offer_sdp,
-                module_id=module_id,
-            )
+                _LOGGER.info("Sending WebRTC offer to device %s (module=%s)", device_id, module_id)
+                await self._signaling.send_offer(
+                    device_id=device_id,
+                    sdp=offer_sdp,
+                    module_id=module_id,
+                )
 
             # Session is now ready — flush any buffered ICE candidates
             self._session_ready = True

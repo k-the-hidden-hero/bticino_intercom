@@ -126,3 +126,62 @@ class TestExtractImageFromEvent:
         url, _expires, _time = cam._extract_image_from_event(event)
 
         assert url == "https://example.com/direct.jpg"
+
+
+class TestConvertOfferToAnswerSdp:
+    """Tests for BticinoWebRTCCamera.convert_offer_to_answer_sdp static method."""
+
+    def test_actpass_becomes_active(self) -> None:
+        """a=setup:actpass is replaced with a=setup:active."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 123 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:0\r\n"
+        )
+        result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
+        assert "a=setup:active" in result
+        assert "a=setup:actpass" not in result
+
+    def test_other_attributes_preserved(self) -> None:
+        """Non-setup attributes remain unchanged."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 123 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:0\r\n"
+            "a=rtpmap:111 opus/48000/2\r\n"
+            "a=ice-ufrag:abc\r\n"
+        )
+        result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
+        assert "a=mid:0" in result
+        assert "a=rtpmap:111 opus/48000/2" in result
+        assert "a=ice-ufrag:abc" in result
+        assert "v=0" in result
+
+    def test_multiple_media_sections_all_converted(self) -> None:
+        """Multiple m= sections each with a=setup:actpass are all converted."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 123 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:0\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:1\r\n"
+        )
+        result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
+        assert result.count("a=setup:active") == 2
+        assert "a=setup:actpass" not in result
