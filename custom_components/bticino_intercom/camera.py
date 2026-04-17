@@ -396,10 +396,13 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         Applied to the device's answer BEFORE forwarding to the browser.
         Only modifies the audio m-section; video is left unchanged.
 
-        Without this: browser throws "Incompatible send direction" because
-        its offer had recvonly but the answer says sendrecv.
-        With this: browser sees sendonly (compatible with recvonly offer)
-        and plays the incoming audio stream normally.
+        The browser's original offer has recvonly for audio. The device may
+        respond with sendrecv ("I send and receive") or recvonly ("I receive").
+        Neither is compatible with the browser's recvonly offer — the browser
+        rejects any answer that implies receiving audio it didn't offer to send.
+
+        Fix: force audio to sendonly in the answer, which is the only direction
+        compatible with the browser's recvonly offer per RFC 3264.
         """
         lines = answer_sdp.split("\r\n")
         result = []
@@ -410,7 +413,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             elif line.startswith("m="):
                 in_audio = False
 
-            if in_audio and line == "a=sendrecv":
+            if in_audio and line in ("a=sendrecv", "a=recvonly"):
                 result.append("a=sendonly")
             else:
                 result.append(line)
