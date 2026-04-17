@@ -269,7 +269,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
                 if session is None:
                     # New call: open session and fire event only once
-                    watchdog = self.hass.async_create_task(self._call_session_watchdog(calling_module_id))
+                    watchdog = self.hass.async_create_background_task(
+                        self._call_session_watchdog(calling_module_id),
+                        name=f"{DOMAIN} call watchdog - {calling_module_id}",
+                    )
                     self._active_calls[calling_module_id] = {
                         "started": now,
                         "last_seen": now,
