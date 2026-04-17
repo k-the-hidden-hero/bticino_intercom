@@ -397,6 +397,13 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 )
                 answer_sdp = self.convert_offer_to_answer_sdp(offer_sdp)
                 await self._signaling.send_answer(answer_sdp)
+
+                # Send the device's original offer to the browser as the "answer".
+                # The browser needs a remote SDP to complete the WebRTC handshake.
+                # The device's offer serves this role — it contains the device's
+                # media capabilities, ICE credentials, and DTLS fingerprint.
+                device_sdp = active_call["sdp"]
+                send_message(WebRTCAnswer(answer=device_sdp))
             else:
                 # --- Offer mode: initiate on-demand call ---
                 module_id = None

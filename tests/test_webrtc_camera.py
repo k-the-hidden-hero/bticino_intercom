@@ -92,6 +92,13 @@ async def test_answer_mode_when_active_call(
     assert "a=setup:active" in answer_sdp
     assert "a=setup:actpass" not in answer_sdp
 
+    # Verify WebRTCAnswer was sent to browser with device's SDP
+    from homeassistant.components.camera.webrtc import WebRTCAnswer
+
+    answer_messages = [m for m in messages if isinstance(m, WebRTCAnswer)]
+    assert len(answer_messages) == 1
+    assert answer_messages[0].answer == "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\na=setup:actpass\r\n"
+
 
 async def test_offer_mode_when_no_active_call(
     hass: HomeAssistant,
