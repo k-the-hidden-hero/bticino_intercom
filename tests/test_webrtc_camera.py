@@ -10,28 +10,41 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.bticino_intercom.const import DOMAIN
 
 
-async def test_webrtc_camera_created(
+def _get_all_webrtc_cameras(hass, mock_setup_entry):
+    """Helper to retrieve all WebRTC camera entity objects."""
+    entity_comp = hass.data["entity_components"]["camera"]
+    return [e for e in entity_comp.entities if hasattr(e, "_module_id")]
+
+
+def _get_webrtc_camera(hass, mock_setup_entry):
+    """Helper to retrieve the first WebRTC camera entity object."""
+    cameras = _get_all_webrtc_cameras(hass, mock_setup_entry)
+    return cameras[0] if cameras else None
+
+
+async def test_webrtc_cameras_created_per_external_unit(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
 ) -> None:
-    """Test that a WebRTC camera entity is created."""
+    """One WebRTC camera per BNEU external unit."""
     states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    webrtc_entities = [s for s in states if "live_video" in s]
-    assert len(webrtc_entities) == 1
+    # Find cameras that are NOT snapshot/vignette
+    non_event_cameras = [s for s in states if "snapshot" not in s and "vignette" not in s]
+    assert len(non_event_cameras) == 2  # Two BNEU modules
 
 
 async def test_webrtc_camera_has_stream_feature(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
 ) -> None:
-    """Test that the WebRTC camera supports STREAM feature."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    webrtc_entities = [s for s in states if "live_video" in s]
-    assert len(webrtc_entities) == 1
+    """Test that all WebRTC cameras support STREAM feature."""
+    cameras = _get_all_webrtc_cameras(hass, mock_setup_entry)
+    assert len(cameras) == 2
 
-    state = hass.states.get(webrtc_entities[0])
-    supported = state.attributes.get("supported_features", 0)
-    assert supported & CameraEntityFeature.STREAM
+    for camera in cameras:
+        state = hass.states.get(camera.entity_id)
+        supported = state.attributes.get("supported_features", 0)
+        assert supported & CameraEntityFeature.STREAM
 
 
 async def test_webrtc_camera_snapshot_entities(
@@ -40,19 +53,10 @@ async def test_webrtc_camera_snapshot_entities(
 ) -> None:
     """Test that snapshot and vignette cameras are also created."""
     states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    assert len(states) == 3  # snapshot + vignette + webrtc
+    assert len(states) == 4  # snapshot + vignette + 2 webrtc
     names = {hass.states.get(s).attributes.get("friendly_name", "") for s in states}
     assert any("Snapshot" in n for n in names)
     assert any("Vignette" in n for n in names)
-    assert any("Live Video" in n for n in names)
-
-
-def _get_webrtc_camera(hass, mock_setup_entry):
-    """Helper to retrieve the WebRTC camera entity object."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    webrtc_entity_id = next(s for s in states if "live_video" in s)
-    entity_comp = hass.data["entity_components"]["camera"]
-    return next(e for e in entity_comp.entities if e.entity_id == webrtc_entity_id)
 
 
 async def test_answer_mode_when_active_call(

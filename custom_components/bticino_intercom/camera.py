@@ -52,8 +52,22 @@ async def async_setup_entry(
     entities: list[Camera] = [
         BticinoSnapshotCamera(coordinator),
         BticinoVignetteCamera(coordinator),
-        BticinoWebRTCCamera(coordinator, account, signaling_client),
     ]
+
+    # Create one WebRTC camera per external unit (BNEU module)
+    for mid, mdata in coordinator.data.get("modules", {}).items():
+        variant = mdata.get("variant", "")
+        if "bneu_external_unit" in variant:
+            entities.append(
+                BticinoWebRTCCamera(
+                    coordinator,
+                    account,
+                    signaling_client,
+                    module_id=mid,
+                    module_name=mdata.get("name", mid),
+                )
+            )
+
     async_add_entities(entities)
 
 
@@ -260,7 +274,6 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Live Video"
     _attr_supported_features = CameraEntityFeature.STREAM
     _attr_entity_registry_enabled_default = True
 
@@ -269,13 +282,17 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         coordinator: BticinoIntercomCoordinator,
         account: AsyncAccount,
         signaling_client: SignalingClient,
+        module_id: str,
+        module_name: str,
     ) -> None:
         """Initialize the WebRTC camera."""
         super().__init__(coordinator)
         Camera.__init__(self)
         self._account = account
         self._signaling = signaling_client
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_webrtc"
+        self._module_id = module_id
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_webrtc_{module_id}"
+        self._attr_name = module_name
         self._turn_servers: list[RTCIceServer] = []
         # Buffer for ICE candidates that arrive before session is ready
         self._pending_candidates: list[RTCIceCandidateInit] = []
@@ -409,18 +426,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 send_message(WebRTCAnswer(answer=device_sdp))
             else:
                 # --- Offer mode: initiate on-demand call ---
-                module_id = None
-                for mid, mdata in self.coordinator.data.get("modules", {}).items():
-                    variant = mdata.get("variant", "")
-                    if "bneu_external_unit" in variant:
-                        module_id = mid
-                        break
-
-                _LOGGER.info("Sending WebRTC offer to device %s (module=%s)", device_id, module_id)
+                _LOGGER.info("Sending WebRTC offer to device %s (module=%s)", device_id, self._module_id)
                 await self._signaling.send_offer(
                     device_id=device_id,
                     sdp=offer_sdp,
-                    module_id=module_id,
+                    module_id=self._module_id,
                 )
 
             # In answer mode, we're ready immediately (no on_answer callback expected).

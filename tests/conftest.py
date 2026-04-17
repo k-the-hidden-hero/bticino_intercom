@@ -20,6 +20,8 @@ EXTERNAL_UNIT_ID = "d9a63b-a06f-2ef633a2f733"
 EXTERNAL_UNIT_NAME = "Citofono Strada"
 DOORLOCK_ID = "d9a63b-a06f-2ef633a2f785"
 STAIRCASE_LIGHT_ID = "d9a63b-0560-2ef633a2f7d3"
+EXTERNAL_UNIT_2_ID = "d9a63b-a16f-2ef633a2f85f"
+EXTERNAL_UNIT_2_NAME = "Citofono Ingresso"
 SESSION_ID = "5ba94f7d-b300-4d8e-9508-13c3424b8034"
 
 # Aliases used by other test modules
@@ -63,6 +65,14 @@ def mock_modules_data() -> dict[str, Any]:
             "id": EXTERNAL_UNIT_ID,
             "type": "BNEU",
             "name": EXTERNAL_UNIT_NAME,
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+            "variant": "BNEU:bneu_external_unit",
+        },
+        EXTERNAL_UNIT_2_ID: {
+            "id": EXTERNAL_UNIT_2_ID,
+            "type": "BNEU",
+            "name": EXTERNAL_UNIT_2_NAME,
             "reachable": True,
             "bridge": BRIDGE_MAC,
             "variant": "BNEU:bneu_external_unit",
