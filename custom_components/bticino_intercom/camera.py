@@ -408,7 +408,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             self._signaling._on_event = on_event
 
             active_call = self.coordinator.active_call
-            if active_call and active_call.get("sdp"):
+            if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
                 # --- Answer mode: respond to the device's incoming call ---
                 _LOGGER.info(
                     "Answering incoming call (session=%s, device=%s)",
@@ -435,7 +435,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
             # In answer mode, we're ready immediately (no on_answer callback expected).
             # In offer mode, on_answer handles this when the device responds.
-            if active_call and active_call.get("sdp"):
+            if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
                 self._session_ready = True
                 await self._flush_pending_candidates()
 

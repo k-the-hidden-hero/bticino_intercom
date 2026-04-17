@@ -104,6 +104,40 @@ async def test_answer_mode_when_active_call(
     assert answer_messages[0].answer == "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\na=setup:actpass\r\n"
 
 
+async def test_answer_mode_only_for_matching_module(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Answer mode only engages when active_call module_id matches this camera."""
+    from tests.conftest import EXTERNAL_UNIT_2_ID, EXTERNAL_UNIT_ID
+
+    cameras = _get_all_webrtc_cameras(hass, mock_setup_entry)
+    # Find camera for unit 1
+    camera_1 = next(c for c in cameras if c._module_id == EXTERNAL_UNIT_ID)
+
+    # Set active call for unit 2 (NOT this camera's module)
+    camera_1.coordinator._active_call = {
+        "session_id": "sess_other",
+        "tag_id": "tag",
+        "device_id": "00:03:50:d9:a6:3b",
+        "module_id": EXTERNAL_UNIT_2_ID,
+        "sdp": "v=0\r\ndevice sdp\r\n",
+    }
+
+    signaling = hass.data[DOMAIN][mock_setup_entry.entry_id]["signaling_client"]
+    signaling.send_offer = AsyncMock(return_value="sess_new")
+    signaling.send_answer = AsyncMock()
+    signaling._is_connected = True
+    signaling.is_connected = True
+
+    messages = []
+    await camera_1.async_handle_async_webrtc_offer("v=0\r\na=setup:actpass\r\n", "test_sess", messages.append)
+
+    # Should use OFFER mode (not answer) because call is for different module
+    signaling.send_offer.assert_called_once()
+    signaling.send_answer.assert_not_called()
+
+
 async def test_offer_mode_when_no_active_call(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
