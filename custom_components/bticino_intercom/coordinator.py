@@ -1,5 +1,6 @@
 """Data update coordinator for the BTicino Intercom integration."""
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,8 @@ from pybticino import AsyncAccount, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError
 
 from .const import (
+    CALL_RETRANSMIT_WINDOW,
+    CALL_SESSION_MAX_DURATION,
     DATA_LAST_EVENT,
     DEFAULT_NAME,
     DOMAIN,
@@ -70,7 +73,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._main_device_id = None
         self._last_ws_message_time: datetime | None = None
         self._ws_stale = False
-        self._last_incoming_call_time: dict[str, datetime] = {}
+        # Per-module active call sessions.
+        # {"started": datetime, "last_seen": datetime,
+        #  "watchdog": asyncio.Task | None}
+        self._active_calls: dict[str, dict[str, Any]] = {}
 
     @property
     def main_device_id(self) -> str | None:
@@ -259,16 +265,23 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
             if rtc_event_type == "call":
                 now = datetime.now(UTC)
-                last_call = getattr(self, "_last_incoming_call_time", {}).get(calling_module_id)
-                if not hasattr(self, "_last_incoming_call_time"):
-                    self._last_incoming_call_time = {}
-                if not last_call or (now - last_call).total_seconds() > 30:
-                    self._last_incoming_call_time[calling_module_id] = now
+                session = self._active_calls.get(calling_module_id)
+
+                if session is None:
+                    # Nuova chiamata: apri sessione e spara evento una sola volta
+                    watchdog = self.hass.async_create_task(
+                        self._call_session_watchdog(calling_module_id)
+                    )
+                    self._active_calls[calling_module_id] = {
+                        "started": now,
+                        "last_seen": now,
+                        "watchdog": watchdog,
+                    }
                     new_event_type = EVENT_TYPE_INCOMING_CALL
                     log_message = f"Incoming call detected via RTC for module {calling_module_id}"
-                    # Dispatch signal for binary sensor
-                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
-                    # Fire Logbook event
+                    async_dispatcher_send(
+                        self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id
+                    )
                     self.hass.bus.async_fire(
                         EVENT_LOGBOOK_INCOMING_CALL,
                         {
@@ -276,7 +289,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                             "module_id": calling_module_id,
                         },
                     )
+                else:
+                    # Retrasmissione di chiamata in corso: solo refresh timestamp
+                    session["last_seen"] = now
+                    _LOGGER.debug(
+                        "Ignoring retransmitted 'call' for module %s (session active)",
+                        calling_module_id,
+                    )
             elif rtc_event_type == "rescind":
+                self._end_call_session(calling_module_id, reason="rescind")
                 new_event_type = EVENT_TYPE_ANSWERED_ELSEWHERE
                 log_message = f"Call answered elsewhere for module {calling_module_id}"
                 # Dispatch signal to turn off binary sensor
@@ -290,6 +311,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     },
                 )
             elif rtc_event_type == "terminate":
+                self._end_call_session(calling_module_id, reason="terminate")
                 new_event_type = EVENT_TYPE_TERMINATED
                 log_message = f"Call terminated/hung up for module {calling_module_id}"
                 # Dispatch signal to turn off binary sensor
@@ -359,6 +381,54 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             updated = True
 
         return updated
+
+    def _end_call_session(self, module_id: str, reason: str) -> None:
+        """Close an active call session and cancel its watchdog."""
+        session = self._active_calls.pop(module_id, None)
+        if session is None:
+            return
+        watchdog: asyncio.Task | None = session.get("watchdog")
+        if watchdog is not None and not watchdog.done():
+            watchdog.cancel()
+        _LOGGER.debug(
+            "Call session for module %s closed (reason=%s)", module_id, reason
+        )
+
+    async def _call_session_watchdog(self, module_id: str) -> None:
+        """Fallback watchdog: closes the session if rescind/terminate
+        never arrives, or if 'call' retransmissions stop."""
+        try:
+            while True:
+                await asyncio.sleep(CALL_RETRANSMIT_WINDOW)
+                session = self._active_calls.get(module_id)
+                if session is None:
+                    return
+                now = datetime.now(UTC)
+                idle = (now - session["last_seen"]).total_seconds()
+                total = (now - session["started"]).total_seconds()
+
+                if idle >= CALL_RETRANSMIT_WINDOW:
+                    _LOGGER.info(
+                        "Call session for module %s closed by inactivity (%.1fs)",
+                        module_id, idle,
+                    )
+                    async_dispatcher_send(
+                        self.hass, SIGNAL_CALL_RECEIVED, False, module_id
+                    )
+                    self._end_call_session(module_id, reason="inactivity")
+                    return
+                if total >= CALL_SESSION_MAX_DURATION:
+                    _LOGGER.warning(
+                        "Call session for module %s closed by hard timeout (%.1fs)",
+                        module_id, total,
+                    )
+                    async_dispatcher_send(
+                        self.hass, SIGNAL_CALL_RECEIVED, False, module_id
+                    )
+                    self._end_call_session(module_id, reason="hard_timeout")
+                    return
+        except asyncio.CancelledError:
+            raise
 
     @property
     def ws_stale(self) -> bool:
