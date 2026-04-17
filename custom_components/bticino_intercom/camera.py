@@ -363,6 +363,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             async def on_answer(sig_session_id: str, sdp: str) -> None:
                 _LOGGER.info("Received answer SDP for session %s", sig_session_id)
                 send_message(WebRTCAnswer(answer=sdp))
+                # Device has processed our offer and replied — safe to send ICE candidates now
+                self._session_ready = True
+                await self._flush_pending_candidates()
 
             async def on_candidate(sig_session_id: str, ice: dict) -> None:
                 candidate_str = ice.get("candidate", "")
@@ -420,9 +423,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                     module_id=module_id,
                 )
 
-            # Session is now ready — flush any buffered ICE candidates
-            self._session_ready = True
-            await self._flush_pending_candidates()
+            # In answer mode, we're ready immediately (no on_answer callback expected).
+            # In offer mode, on_answer handles this when the device responds.
+            if active_call and active_call.get("sdp"):
+                self._session_ready = True
+                await self._flush_pending_candidates()
 
         except Exception as err:
             _LOGGER.exception("Failed to handle WebRTC offer")
