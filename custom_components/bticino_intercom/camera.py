@@ -337,13 +337,39 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             _LOGGER.debug("Failed to fetch snapshot for WebRTC camera")
             return None
 
+    # --- SDP manipulation methods ---
+    #
+    # The BTicino device requires specific SDP attributes to enable audio.
+    # The browser and device see DIFFERENT SDPs — we act as a translator:
+    #
+    #   Browser offer              What we send to device     Device answer           What browser sees
+    #   ─────────────              ──────────────────────     ─────────────           ─────────────────
+    #   audio: recvonly    ──►     audio: sendrecv            audio: sendrecv   ──►   audio: sendonly
+    #   video: recvonly    ──►     video: recvonly             video: sendonly   ──►   video: sendonly
+    #   setup: actpass     ──►     setup: actpass              setup: active    ──►   setup: active
+    #
+    # Why this matters:
+    # - The device only transmits audio if it sees "sendrecv" in the offer
+    #   (discovered by comparing with the official BTicino/Netatmo mobile app)
+    # - But the browser rejects an answer with "sendrecv" when its offer said
+    #   "recvonly" (RFC 3264: direction mismatch → "Incompatible send direction")
+    # - So we tell the device "sendrecv" to activate audio, then rewrite the
+    #   answer back to "sendonly" before the browser sees it
+    #
+    # Methods:
+    # - _enable_audio_sendrecv():      browser offer → device (recvonly → sendrecv)
+    # - _fix_answer_audio_direction(): device answer → browser (sendrecv → sendonly)
+    # - convert_offer_to_answer_sdp(): DTLS role for answer mode (actpass → active)
+
     @staticmethod
     def _enable_audio_sendrecv(sdp: str) -> str:
-        """Change audio direction from recvonly to sendrecv in SDP.
+        """Change audio direction from recvonly to sendrecv in the outgoing SDP offer.
 
-        The BTicino device only sends audio when it sees sendrecv in the
-        offer (like the mobile app). With recvonly, the device responds
-        with sendonly but doesn't actually transmit audio data.
+        Applied to the browser's offer BEFORE sending to the BTicino device.
+        Only modifies the audio m-section; video stays recvonly.
+
+        Without this: device responds with sendonly but transmits no audio data.
+        With this: device sees sendrecv, enables audio transmission.
         """
         lines = sdp.split("\r\n")
         result = []
@@ -362,12 +388,15 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
     @staticmethod
     def _fix_answer_audio_direction(answer_sdp: str) -> str:
-        """Fix audio direction in device answer for browser compatibility.
+        """Rewrite audio direction in the device's answer for browser compatibility.
 
-        We send sendrecv for audio to the device (to enable audio output),
-        but the browser's offer has recvonly. The device answers with
-        sendrecv, which the browser rejects as incompatible.
-        Fix: change sendrecv to sendonly in the audio section of the answer.
+        Applied to the device's answer BEFORE forwarding to the browser.
+        Only modifies the audio m-section; video is left unchanged.
+
+        Without this: browser throws "Incompatible send direction" because
+        its offer had recvonly but the answer says sendrecv.
+        With this: browser sees sendonly (compatible with recvonly offer)
+        and plays the incoming audio stream normally.
         """
         lines = answer_sdp.split("\r\n")
         result = []
@@ -386,7 +415,12 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
     @staticmethod
     def convert_offer_to_answer_sdp(offer_sdp: str) -> str:
-        """Convert a browser SDP offer to be usable as an answer."""
+        """Convert a browser SDP offer to be usable as an answer to the device.
+
+        Used in answer mode (incoming call): the browser's offer is sent to
+        the device as an "answer" to the device's original call offer.
+        The DTLS setup role must change from actpass (offerer) to active (answerer).
+        """
         return offer_sdp.replace("a=setup:actpass", "a=setup:active")
 
     async def _flush_pending_candidates(self) -> None:
