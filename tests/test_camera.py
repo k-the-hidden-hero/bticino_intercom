@@ -189,6 +189,34 @@ class TestFixAnswerAudioDirection:
         assert "a=sendrecv" not in result
 
 
+class TestAudioSdpConditionalRewrite:
+    """Test that answer rewriting is conditional on offer modification."""
+
+    def test_recvonly_offer_gets_answer_fixed(self) -> None:
+        """When offer has recvonly (standard HA player), answer sendrecv -> sendonly."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n"
+        modified = BticinoWebRTCCamera._enable_audio_sendrecv(offer)
+        was_rewritten = modified != offer
+        assert was_rewritten is True
+
+        answer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"
+        # Should fix because we rewrote the offer
+        fixed = BticinoWebRTCCamera._fix_answer_audio_direction(answer)
+        assert "a=sendonly" in fixed
+
+    def test_sendrecv_offer_leaves_answer_alone(self) -> None:
+        """When offer already has sendrecv (two-way card), answer stays sendrecv."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"
+        modified = BticinoWebRTCCamera._enable_audio_sendrecv(offer)
+        was_rewritten = modified != offer
+        assert was_rewritten is False
+        # Should NOT fix the answer — two-way audio card expects sendrecv
+
+
 class TestConvertOfferToAnswerSdp:
     """Tests for BticinoWebRTCCamera.convert_offer_to_answer_sdp static method."""
 

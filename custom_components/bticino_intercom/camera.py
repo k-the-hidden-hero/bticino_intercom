@@ -348,6 +348,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     #   video: recvonly    ──►     video: recvonly             video: sendonly   ──►   video: sendonly
     #   setup: actpass     ──►     setup: actpass              setup: active    ──►   setup: active
     #
+    # When the browser natively sends sendrecv (e.g., two-way audio card),
+    # no rewriting is needed — the SDP passes through unchanged in both directions.
+    #
     # Why this matters:
     # - The device only transmits audio if it sees "sendrecv" in the offer
     #   (discovered by comparing with the official BTicino/Netatmo mobile app)
@@ -464,10 +467,12 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             async def on_answer(sig_session_id: str, sdp: str) -> None:
                 _LOGGER.info("Received answer SDP for session %s", sig_session_id)
                 self._signaling_session_id = sig_session_id
-                # Fix audio direction: device sends sendrecv but browser expects sendonly
-                # (because browser's offer has recvonly for audio)
-                fixed_sdp = self._fix_answer_audio_direction(sdp)
-                send_message(WebRTCAnswer(answer=fixed_sdp))
+                # Only fix audio direction if we rewrote the offer from recvonly to sendrecv.
+                # If the browser natively sent sendrecv (e.g., two-way audio card),
+                # the answer's sendrecv is correct and must not be downgraded.
+                if audio_was_rewritten:
+                    sdp = self._fix_answer_audio_direction(sdp)
+                send_message(WebRTCAnswer(answer=sdp))
                 # Device has processed our offer and replied — safe to send ICE candidates now
                 self._session_ready = True
                 await self._flush_pending_candidates()
@@ -497,7 +502,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
             # Enable bidirectional audio — the device only sends audio when
             # it sees sendrecv (like the mobile app does)
-            offer_sdp = self._enable_audio_sendrecv(offer_sdp)
+            modified_offer = self._enable_audio_sendrecv(offer_sdp)
+            audio_was_rewritten = modified_offer != offer_sdp
+            offer_sdp = modified_offer
 
             active_call = self.coordinator.active_call
             if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
