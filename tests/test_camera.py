@@ -156,6 +156,39 @@ class TestEnableAudioSendrecv:
         assert result.count("a=recvonly") == 1  # Only video
 
 
+class TestFixAnswerAudioDirection:
+    """Test answer SDP audio direction fix."""
+
+    def test_sendrecv_becomes_sendonly_in_audio(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\n"
+        result = BticinoWebRTCCamera._fix_answer_audio_direction(sdp)
+        lines = result.split("\r\n")
+        audio_idx = next(i for i, line in enumerate(lines) if line.startswith("m=audio"))
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        assert "a=sendonly" in lines[audio_idx:video_idx]
+        assert "a=sendrecv" not in lines[audio_idx:video_idx]
+
+    def test_video_direction_unchanged(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\n"
+        result = BticinoWebRTCCamera._fix_answer_audio_direction(sdp)
+        lines = result.split("\r\n")
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        video_section = lines[video_idx:]
+        assert "a=sendonly" in video_section
+
+    def test_already_sendonly_unchanged(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n"
+        result = BticinoWebRTCCamera._fix_answer_audio_direction(sdp)
+        assert "a=sendonly" in result
+        assert "a=sendrecv" not in result
+
+
 class TestConvertOfferToAnswerSdp:
     """Tests for BticinoWebRTCCamera.convert_offer_to_answer_sdp static method."""
 

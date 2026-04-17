@@ -361,6 +361,30 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         return "\r\n".join(result)
 
     @staticmethod
+    def _fix_answer_audio_direction(answer_sdp: str) -> str:
+        """Fix audio direction in device answer for browser compatibility.
+
+        We send sendrecv for audio to the device (to enable audio output),
+        but the browser's offer has recvonly. The device answers with
+        sendrecv, which the browser rejects as incompatible.
+        Fix: change sendrecv to sendonly in the audio section of the answer.
+        """
+        lines = answer_sdp.split("\r\n")
+        result = []
+        in_audio = False
+        for line in lines:
+            if line.startswith("m=audio"):
+                in_audio = True
+            elif line.startswith("m="):
+                in_audio = False
+
+            if in_audio and line == "a=sendrecv":
+                result.append("a=sendonly")
+            else:
+                result.append(line)
+        return "\r\n".join(result)
+
+    @staticmethod
     def convert_offer_to_answer_sdp(offer_sdp: str) -> str:
         """Convert a browser SDP offer to be usable as an answer."""
         return offer_sdp.replace("a=setup:actpass", "a=setup:active")
@@ -406,7 +430,10 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             async def on_answer(sig_session_id: str, sdp: str) -> None:
                 _LOGGER.info("Received answer SDP for session %s", sig_session_id)
                 self._signaling_session_id = sig_session_id
-                send_message(WebRTCAnswer(answer=sdp))
+                # Fix audio direction: device sends sendrecv but browser expects sendonly
+                # (because browser's offer has recvonly for audio)
+                fixed_sdp = self._fix_answer_audio_direction(sdp)
+                send_message(WebRTCAnswer(answer=fixed_sdp))
                 # Device has processed our offer and replied — safe to send ICE candidates now
                 self._session_ready = True
                 await self._flush_pending_candidates()
