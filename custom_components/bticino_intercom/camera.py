@@ -297,6 +297,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         # Buffer for ICE candidates that arrive before session is ready
         self._pending_candidates: list[RTCIceCandidateInit] = []
         self._session_ready = False
+        # Per-camera signaling session ID (the shared SignalingClient tracks
+        # only the LAST session across all cameras)
+        self._signaling_session_id: str | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -379,6 +382,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             # Set up callbacks for this session
             async def on_answer(sig_session_id: str, sdp: str) -> None:
                 _LOGGER.info("Received answer SDP for session %s", sig_session_id)
+                self._signaling_session_id = sig_session_id
                 send_message(WebRTCAnswer(answer=sdp))
                 # Device has processed our offer and replied — safe to send ICE candidates now
                 self._session_ready = True
@@ -436,6 +440,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             # In answer mode, we're ready immediately (no on_answer callback expected).
             # In offer mode, on_answer handles this when the device responds.
             if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
+                self._signaling_session_id = self._signaling.session_id
                 self._session_ready = True
                 await self._flush_pending_candidates()
 
@@ -486,7 +491,18 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
         """Close the WebRTC session by sending terminate."""
+        _LOGGER.info(
+            "Closing WebRTC session for %s (signaling_session=%s)",
+            self._module_id,
+            self._signaling_session_id,
+        )
         self._session_ready = False
         self._pending_candidates.clear()
-        if self._signaling.session_id:
+        if self._signaling_session_id:
+            # Point the shared signaling client at this camera's session so
+            # send_terminate uses the correct session_id.  HA runs on a
+            # single-threaded event loop, so there is no race with other
+            # cameras between setting the id and awaiting send_terminate.
+            self._signaling._session_id = self._signaling_session_id
+            self._signaling_session_id = None
             self.hass.async_create_task(self._signaling.send_terminate())
