@@ -269,9 +269,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
                 if session is None:
                     # New call: open session and fire event only once
-                    watchdog = self.hass.async_create_task(
-                        self._call_session_watchdog(calling_module_id)
-                    )
+                    watchdog = self.hass.async_create_task(self._call_session_watchdog(calling_module_id))
                     self._active_calls[calling_module_id] = {
                         "started": now,
                         "last_seen": now,
@@ -279,9 +277,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     }
                     new_event_type = EVENT_TYPE_INCOMING_CALL
                     log_message = f"Incoming call detected via RTC for module {calling_module_id}"
-                    async_dispatcher_send(
-                        self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id
-                    )
+                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
                     self.hass.bus.async_fire(
                         EVENT_LOGBOOK_INCOMING_CALL,
                         {
@@ -390,9 +386,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         watchdog: asyncio.Task | None = session.get("watchdog")
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
-        _LOGGER.debug(
-            "Call session for module %s closed (reason=%s)", module_id, reason
-        )
+        _LOGGER.debug("Call session for module %s closed (reason=%s)", module_id, reason)
 
     async def _call_session_watchdog(self, module_id: str) -> None:
         """Fallback watchdog: closes the session if rescind/terminate
@@ -410,21 +404,19 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 if idle >= CALL_RETRANSMIT_WINDOW:
                     _LOGGER.info(
                         "Call session for module %s closed by inactivity (%.1fs)",
-                        module_id, idle,
+                        module_id,
+                        idle,
                     )
-                    async_dispatcher_send(
-                        self.hass, SIGNAL_CALL_RECEIVED, False, module_id
-                    )
+                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
                     self._end_call_session(module_id, reason="inactivity")
                     return
                 if total >= CALL_SESSION_MAX_DURATION:
                     _LOGGER.warning(
                         "Call session for module %s closed by hard timeout (%.1fs)",
-                        module_id, total,
+                        module_id,
+                        total,
                     )
-                    async_dispatcher_send(
-                        self.hass, SIGNAL_CALL_RECEIVED, False, module_id
-                    )
+                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
                     self._end_call_session(module_id, reason="hard_timeout")
                     return
         except asyncio.CancelledError:
