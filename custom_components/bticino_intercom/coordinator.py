@@ -70,6 +70,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._main_device_id = None
         self._last_ws_message_time: datetime | None = None
         self._ws_stale = False
+        self._last_incoming_call_time: dict[str, datetime] = {}
 
     @property
     def main_device_id(self) -> str | None:
@@ -257,18 +258,24 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             log_message = None
 
             if rtc_event_type == "call":
-                new_event_type = EVENT_TYPE_INCOMING_CALL
-                log_message = f"Incoming call detected via RTC for module {calling_module_id}"
-                # Dispatch signal for binary sensor
-                async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
-                # Fire Logbook event
-                self.hass.bus.async_fire(
-                    EVENT_LOGBOOK_INCOMING_CALL,
-                    {
-                        "name": f"Incoming Call ({calling_module_name})",
-                        "module_id": calling_module_id,
-                    },
-                )
+                now = datetime.now(UTC)
+                last_call = getattr(self, "_last_incoming_call_time", {}).get(calling_module_id)
+                if not hasattr(self, "_last_incoming_call_time"):
+                    self._last_incoming_call_time = {}
+                if not last_call or (now - last_call).total_seconds() > 30:
+                    self._last_incoming_call_time[calling_module_id] = now
+                    new_event_type = EVENT_TYPE_INCOMING_CALL
+                    log_message = f"Incoming call detected via RTC for module {calling_module_id}"
+                    # Dispatch signal for binary sensor
+                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
+                    # Fire Logbook event
+                    self.hass.bus.async_fire(
+                        EVENT_LOGBOOK_INCOMING_CALL,
+                        {
+                            "name": f"Incoming Call ({calling_module_name})",
+                            "module_id": calling_module_id,
+                        },
+                    )
             elif rtc_event_type == "rescind":
                 new_event_type = EVENT_TYPE_ANSWERED_ELSEWHERE
                 log_message = f"Call answered elsewhere for module {calling_module_id}"
@@ -362,6 +369,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         """Handle incoming WebSocket messages."""
         self._last_ws_message_time = datetime.now(UTC)
         self._ws_stale = False
+        self._last_incoming_call_time: dict[str, datetime] = {}
         _LOGGER.debug("Coordinator: _handle_websocket_message called with: %s", message)
         # Directly call _process_websocket_event with the received message
         data_updated = self._process_websocket_event(message)
