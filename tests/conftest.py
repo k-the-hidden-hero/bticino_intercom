@@ -328,6 +328,9 @@ def mock_signaling_client() -> AsyncMock:
     """Create a persistent mock SignalingClient."""
     mock_sig = AsyncMock()
     mock_sig.is_connected = False
+    # set_session_from_push is a sync method in pybticino — use MagicMock
+    # to avoid "coroutine never awaited" warnings from AsyncMock
+    mock_sig.set_session_from_push = MagicMock()
     return mock_sig
 
 

@@ -39,6 +39,33 @@ class TestRtcOffer:
         assert coordinator.active_call["sdp"] is not None
         assert len(coordinator.active_call["modules"]) == 2
 
+    async def test_offer_sets_signaling_session(
+        self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict
+    ) -> None:
+        """An RTC offer should call set_session_from_push on the signaling client."""
+        from unittest.mock import MagicMock
+
+        mock_signaling = MagicMock()
+        coordinator._signaling_client = mock_signaling
+
+        coordinator._process_websocket_event(ws_rtc_offer)
+
+        mock_signaling.set_session_from_push.assert_called_once_with(
+            session_id=SESSION_ID,
+            tag_id="dgo4dB6RqEk=",
+            correlation_id="1499514006757899539",
+            device_id=BRIDGE_MAC,
+        )
+
+    async def test_offer_without_signaling_client_does_not_crash(
+        self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict
+    ) -> None:
+        """An RTC offer should work fine when signaling client is None."""
+        coordinator._signaling_client = None
+        result = coordinator._process_websocket_event(ws_rtc_offer)
+        assert result is True
+        assert coordinator.active_call is not None
+
     async def test_offer_updates_last_event(self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict) -> None:
         """An RTC offer should update last_event as incoming_call."""
         coordinator._process_websocket_event(ws_rtc_offer)

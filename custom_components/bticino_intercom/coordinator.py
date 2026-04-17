@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from pybticino import AsyncAccount, WebsocketClient
+from pybticino import AsyncAccount, SignalingClient, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError
 
 from .const import (
@@ -52,10 +52,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         entry: ConfigEntry,
         account: AsyncAccount,
         websocket_client: WebsocketClient,
+        signaling_client: SignalingClient | None = None,
     ) -> None:
         """Initialize the coordinator."""
         self.account = account
         self.websocket_client = websocket_client
+        self._signaling_client = signaling_client
 
         super().__init__(
             hass,
@@ -310,6 +312,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 "modules": session_desc.get("modules", []),
             }
             _LOGGER.debug("Active call state stored: session_id=%s, module=%s", session_id, calling_module_id)
+
+            # Prepare the signaling client for answer-mode WebRTC
+            if self._signaling_client:
+                self._signaling_client.set_session_from_push(
+                    session_id=session_id,
+                    tag_id=extra_params.get("tag_id", ""),
+                    correlation_id=str(extra_params.get("correlation_id", "")),
+                    device_id=device_id,
+                )
+                _LOGGER.debug("Signaling session set from push offer: session_id=%s", session_id)
 
             # Call session tracking for retransmission dedup
             now = datetime.now(UTC)

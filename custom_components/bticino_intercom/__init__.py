@@ -96,8 +96,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     account = AsyncAccount(auth_handler)
 
-    # Create the coordinator first, so we can pass its message handler
-    coordinator = BticinoIntercomCoordinator(hass, entry, account, None)  # Pass None for websocket initially
+    # Create the signaling client for WebRTC (lazy-connected on first use)
+    signaling_client = SignalingClient(auth_handler=auth_handler)
+
+    # Create the coordinator, passing signaling_client so it can wire
+    # push-offer sessions for answer-mode WebRTC
+    coordinator = BticinoIntercomCoordinator(
+        hass, entry, account, None, signaling_client=signaling_client
+    )  # Pass None for websocket initially
 
     # Now create the websocket client, passing the coordinator's handler
     # Ensure the callback method exists on the coordinator instance
@@ -107,9 +113,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Pass app_version etc. if needed/customized
     )
     coordinator.websocket_client = websocket_client
-
-    # Create the signaling client for WebRTC (lazy-connected on first use)
-    signaling_client = SignalingClient(auth_handler=auth_handler)
 
     # Store everything in hass.data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
