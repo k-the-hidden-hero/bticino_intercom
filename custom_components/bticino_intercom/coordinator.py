@@ -268,7 +268,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 session = self._active_calls.get(calling_module_id)
 
                 if session is None:
-                    # Nuova chiamata: apri sessione e spara evento una sola volta
+                    # New call: open session and fire event only once
                     watchdog = self.hass.async_create_task(
                         self._call_session_watchdog(calling_module_id)
                     )
@@ -290,7 +290,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                         },
                     )
                 else:
-                    # Retrasmissione di chiamata in corso: solo refresh timestamp
+                    # Retransmission of an ongoing call: only refresh timestamp
                     session["last_seen"] = now
                     _LOGGER.debug(
                         "Ignoring retransmitted 'call' for module %s (session active)",
