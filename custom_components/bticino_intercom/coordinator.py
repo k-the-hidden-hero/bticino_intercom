@@ -226,10 +226,58 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during data fetch")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
+    def _process_incoming_call_push(self, extra_params: dict[str, Any]) -> bool:
+        """Process incoming_call push to extract snapshot/vignette URLs.
+
+        The BNC1-incoming_call push delivers snapshot and vignette URLs
+        directly in extra_params, outside of the RTC signaling path.
+        Convert them into the subevent format the camera entities expect.
+        """
+        snapshot_url = extra_params.get("snapshot_url")
+        vignette_url = extra_params.get("vignette_url")
+        device_id = extra_params.get("device_id")
+
+        if not snapshot_url and not vignette_url:
+            _LOGGER.debug("incoming_call push without snapshot/vignette URLs, ignoring")
+            return False
+
+        now_ts = int(datetime.now(UTC).timestamp())
+        subevent: dict[str, Any] = {"time": now_ts}
+        if snapshot_url:
+            subevent["snapshot"] = {"url": snapshot_url}
+        if vignette_url:
+            subevent["vignette"] = {"url": vignette_url}
+
+        last_event = self.data.get(DATA_LAST_EVENT, {})
+        if last_event and last_event.get("type") == EVENT_TYPE_INCOMING_CALL:
+            # RTC call event already exists — enrich it with image URLs
+            last_event["subevents"] = [subevent]
+            _LOGGER.info("Enriched existing call event with snapshot/vignette from incoming_call push")
+        else:
+            # incoming_call arrived first (or standalone) — create a new entry
+            device_name = self.data.get("modules", {}).get(device_id, {}).get("name", device_id)
+            self.data[DATA_LAST_EVENT] = {
+                "type": EVENT_TYPE_INCOMING_CALL,
+                "timestamp": datetime.now(UTC),
+                "time": now_ts,
+                "module_id": device_id,
+                "module_name": device_name,
+                "subevents": [subevent],
+            }
+            _LOGGER.info("Created call event from incoming_call push with snapshot/vignette URLs")
+
+        return True
+
     def _process_websocket_event(self, message: dict[str, Any]) -> bool:
         """Process event data from websocket and update self.data."""
         updated = False
         extra_params = message.get("extra_params", {})
+
+        # --- Handle incoming_call push (snapshot/vignette delivery) ---
+        push_type = message.get("push_type", "")
+        if push_type.endswith("-incoming_call") or message.get("category") == "incoming_call":
+            return self._process_incoming_call_push(extra_params)
+
         session_data = extra_params.get("data", {}).get("session_description", {})
 
         # Extract module/device ID - prioritize specific module from call, fallback to device_id
@@ -330,6 +378,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 # Extract subevents from the original message if available
                 # session_data was already extracted: extra_params.get("data", {}).get("session_description", {})
                 subevents_data = session_data.get("subevents")
+
+                # If the RTC event has no image subevents, preserve any that
+                # were already stored by an earlier incoming_call push.
+                if not subevents_data:
+                    existing = self.data.get(DATA_LAST_EVENT, {}).get("subevents")
+                    if existing:
+                        subevents_data = existing
 
                 # Update last event data
                 self.data[DATA_LAST_EVENT] = {
