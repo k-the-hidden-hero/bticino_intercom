@@ -347,3 +347,196 @@ async def test_coordinator_fires_logbook_events(
 
     assert len(fired_events) == 1
     assert fired_events[0].data["module_id"] == EXT_UNIT_MODULE_ID
+
+
+# --- incoming_call push (snapshot/vignette) tests ---
+
+
+async def test_incoming_call_push_updates_last_event_with_snapshot(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test incoming_call push creates last_event with snapshot/vignette URLs."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    message = {
+        "push_type": "BNC1-incoming_call",
+        "category": "incoming_call",
+        "extra_params": {
+            "event_type": "incoming_call",
+            "device_id": BRIDGE_MAC,
+            "home_id": HOME_ID,
+            "session_id": "sess_456",
+            "snapshot_url": "https://example.com/realtime_snapshot.jpg",
+            "vignette_url": "https://example.com/realtime_vignette.jpg",
+        },
+    }
+
+    updated = coordinator._process_websocket_event(message)
+
+    assert updated is True
+    last = coordinator.data[DATA_LAST_EVENT]
+    assert last["type"] == EVENT_TYPE_INCOMING_CALL
+    assert last["module_id"] == BRIDGE_MAC
+    assert len(last["subevents"]) == 1
+    assert last["subevents"][0]["snapshot"]["url"] == "https://example.com/realtime_snapshot.jpg"
+    assert last["subevents"][0]["vignette"]["url"] == "https://example.com/realtime_vignette.jpg"
+
+
+async def test_incoming_call_push_enriches_existing_rtc_event(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test incoming_call push enriches an existing RTC call event with image URLs."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    # First: simulate RTC call event (no snapshot)
+    rtc_message = {
+        "extra_params": {
+            "device_id": EXT_UNIT_MODULE_ID,
+            "data": {
+                "session_description": {
+                    "type": "call",
+                    "module_id": EXT_UNIT_MODULE_ID,
+                    "session_id": "sess_789",
+                }
+            },
+        }
+    }
+    coordinator._process_websocket_event(rtc_message)
+
+    assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_INCOMING_CALL
+    assert not coordinator.data[DATA_LAST_EVENT].get("subevents")
+
+    # Then: incoming_call push arrives with snapshot
+    incoming_message = {
+        "push_type": "BNC1-incoming_call",
+        "category": "incoming_call",
+        "extra_params": {
+            "device_id": BRIDGE_MAC,
+            "snapshot_url": "https://example.com/snap.jpg",
+            "vignette_url": "https://example.com/vig.jpg",
+        },
+    }
+    updated = coordinator._process_websocket_event(incoming_message)
+
+    assert updated is True
+    last = coordinator.data[DATA_LAST_EVENT]
+    # Should still be the original call event, enriched
+    assert last["type"] == EVENT_TYPE_INCOMING_CALL
+    assert last["module_id"] == EXT_UNIT_MODULE_ID
+    assert last["subevents"][0]["snapshot"]["url"] == "https://example.com/snap.jpg"
+    assert last["subevents"][0]["vignette"]["url"] == "https://example.com/vig.jpg"
+
+
+async def test_incoming_call_push_without_urls_ignored(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test incoming_call push without snapshot/vignette URLs is ignored."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    message = {
+        "push_type": "BNC1-incoming_call",
+        "category": "incoming_call",
+        "extra_params": {
+            "event_type": "incoming_call",
+            "device_id": BRIDGE_MAC,
+        },
+    }
+
+    updated = coordinator._process_websocket_event(message)
+
+    assert updated is False
+
+
+async def test_rtc_call_preserves_subevents_from_prior_incoming_call(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test RTC call event preserves snapshot subevents from a prior incoming_call push."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    # First: incoming_call push arrives with snapshot
+    incoming_message = {
+        "push_type": "BNC1-incoming_call",
+        "category": "incoming_call",
+        "extra_params": {
+            "device_id": BRIDGE_MAC,
+            "snapshot_url": "https://example.com/early_snap.jpg",
+            "vignette_url": "https://example.com/early_vig.jpg",
+        },
+    }
+    coordinator._process_websocket_event(incoming_message)
+
+    # Then: RTC call event arrives (without subevents)
+    rtc_message = {
+        "extra_params": {
+            "device_id": EXT_UNIT_MODULE_ID,
+            "data": {
+                "session_description": {
+                    "type": "call",
+                    "module_id": EXT_UNIT_MODULE_ID,
+                    "session_id": "sess_abc",
+                }
+            },
+        }
+    }
+    coordinator._process_websocket_event(rtc_message)
+    await hass.async_block_till_done()
+
+    last = coordinator.data[DATA_LAST_EVENT]
+    assert last["type"] == EVENT_TYPE_INCOMING_CALL
+    assert last["module_id"] == EXT_UNIT_MODULE_ID
+    # Snapshot subevents from incoming_call should be preserved
+    assert last["subevents"][0]["snapshot"]["url"] == "https://example.com/early_snap.jpg"
+    assert last["subevents"][0]["vignette"]["url"] == "https://example.com/early_vig.jpg"
+
+
+async def test_incoming_call_push_only_snapshot(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test incoming_call push with only snapshot_url (no vignette)."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    message = {
+        "push_type": "BNC1-incoming_call",
+        "category": "incoming_call",
+        "extra_params": {
+            "device_id": BRIDGE_MAC,
+            "snapshot_url": "https://example.com/only_snap.jpg",
+        },
+    }
+
+    updated = coordinator._process_websocket_event(message)
+
+    assert updated is True
+    last = coordinator.data[DATA_LAST_EVENT]
+    assert last["subevents"][0]["snapshot"]["url"] == "https://example.com/only_snap.jpg"
+    assert "vignette" not in last["subevents"][0]
+
+
+async def test_incoming_call_push_triggers_refresh(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Test _handle_websocket_message triggers update for incoming_call push."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    with (
+        patch.object(coordinator, "async_set_updated_data") as mock_set_data,
+        patch.object(coordinator, "async_request_refresh", new_callable=AsyncMock) as mock_refresh,
+    ):
+        message = {
+            "push_type": "BNC1-incoming_call",
+            "category": "incoming_call",
+            "extra_params": {
+                "device_id": BRIDGE_MAC,
+                "snapshot_url": "https://example.com/snap.jpg",
+            },
+        }
+        await coordinator._handle_websocket_message(message)
+
+        mock_set_data.assert_called_once()
+        mock_refresh.assert_awaited_once()
