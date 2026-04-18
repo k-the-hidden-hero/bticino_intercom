@@ -557,15 +557,14 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             self._signaling._on_candidate = on_candidate
             self._signaling._on_event = on_event
 
-            # Enable bidirectional audio — the device only sends audio when
-            # it sees sendrecv (like the mobile app does)
-            modified_offer = self._enable_audio_sendrecv(offer_sdp)
-            audio_was_rewritten = modified_offer != offer_sdp
-            offer_sdp = modified_offer
-
-            # Inject synthetic audio SSRC — the device needs a sender endpoint
-            # to enable audio transmission (the mobile app has a real mic track)
-            offer_sdp = self._inject_audio_ssrc(offer_sdp)
+            # No SDP audio manipulation needed for offer mode.
+            # The device mic is only active during incoming calls (answer mode).
+            # In offer mode, audio packets arrive but contain silence.
+            # The _enable_audio_sendrecv / _inject_audio_ssrc hacks were tested
+            # and found to cause earlier session termination without enabling
+            # real audio. They are preserved as methods for future use with
+            # two-way audio cards that provide a real microphone track.
+            audio_was_rewritten = False
 
             active_call = self.coordinator.active_call
             if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
