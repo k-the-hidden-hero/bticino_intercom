@@ -217,6 +217,70 @@ class TestAudioSdpConditionalRewrite:
         # Should NOT fix the answer — two-way audio card expects sendrecv
 
 
+class TestInjectAudioSsrc:
+    """Test audio SSRC injection into SDP offer."""
+
+    def test_ssrc_added_to_audio_section(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = (
+            "v=0\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=recvonly\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=mid:1\r\n"
+            "a=recvonly\r\n"
+        )
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        lines = result.split("\r\n")
+        audio_idx = next(i for i, line in enumerate(lines) if line.startswith("m=audio"))
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        audio_section = "\r\n".join(lines[audio_idx:video_idx])
+        assert "a=ssrc:1000 cname:bticino-ha" in audio_section
+        assert "a=ssrc:1000 msid:bticino-intercom audio0" in audio_section
+
+    def test_ssrc_not_added_to_video(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = (
+            "v=0\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=recvonly\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=mid:1\r\n"
+            "a=recvonly\r\n"
+        )
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        lines = result.split("\r\n")
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        video_section = "\r\n".join(lines[video_idx:])
+        assert "cname:bticino-ha" not in video_section
+
+    def test_no_duplicate_if_ssrc_exists(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = (
+            "v=0\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=sendrecv\r\n"
+            "a=ssrc:99999 cname:existing\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+        )
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        assert result.count("a=ssrc:") == 1
+
+    def test_audio_last_section(self) -> None:
+        """SSRC injected even if audio is the last m-section."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=recvonly\r\n"
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        assert "a=ssrc:1000 cname:bticino-ha" in result
+
+
 class TestConvertOfferToAnswerSdp:
     """Tests for BticinoWebRTCCamera.convert_offer_to_answer_sdp static method."""
 

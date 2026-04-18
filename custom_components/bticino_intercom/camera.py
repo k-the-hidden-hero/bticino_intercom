@@ -361,6 +361,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     #
     # Methods:
     # - _enable_audio_sendrecv():      browser offer → device (recvonly → sendrecv)
+    # - _inject_audio_ssrc():          browser offer → device (add synthetic sender SSRC)
     # - _fix_answer_audio_direction(): device answer → browser (sendrecv → sendonly)
     # - convert_offer_to_answer_sdp(): DTLS role for answer mode (actpass → active)
 
@@ -387,6 +388,59 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 result.append("a=sendrecv")
             else:
                 result.append(line)
+        return "\r\n".join(result)
+
+    @staticmethod
+    def _inject_audio_ssrc(sdp: str) -> str:
+        """Inject a synthetic audio SSRC into the SDP if none exists.
+
+        The BTicino device requires a local audio SSRC in the offer to
+        enable audio transmission. The official mobile app adds a real
+        audio track (with microphone) which generates a natural SSRC.
+        Since the HA browser player doesn't have mic access, we inject
+        a synthetic one.
+
+        The SSRC value (1000) is arbitrary — the device just needs to see
+        a valid sender endpoint. The cname follows the app's format.
+
+        Only injects into the audio m-section, and only if no SSRC is
+        already present (to avoid duplicates when a two-way audio card
+        provides its own track).
+        """
+        lines = sdp.split("\r\n")
+
+        # Check if audio section already has an SSRC
+        in_audio = False
+        for line in lines:
+            if line.startswith("m=audio"):
+                in_audio = True
+            elif line.startswith("m="):
+                in_audio = False
+            if in_audio and line.startswith("a=ssrc:"):
+                return sdp  # Already has SSRC, don't duplicate
+
+        # Inject SSRC at end of audio section
+        result = []
+        in_audio = False
+        for line in lines:
+            if line.startswith("m=audio"):
+                in_audio = True
+            elif line.startswith("m=") and in_audio:
+                # End of audio section — inject before next m-line
+                result.append("a=ssrc:1000 cname:bticino-ha")
+                result.append("a=ssrc:1000 msid:bticino-intercom audio0")
+                in_audio = False
+            result.append(line)
+
+        # If audio was the last section
+        if in_audio:
+            if result and result[-1] == "":
+                result.insert(-1, "a=ssrc:1000 cname:bticino-ha")
+                result.insert(-1, "a=ssrc:1000 msid:bticino-intercom audio0")
+            else:
+                result.append("a=ssrc:1000 cname:bticino-ha")
+                result.append("a=ssrc:1000 msid:bticino-intercom audio0")
+
         return "\r\n".join(result)
 
     @staticmethod
@@ -508,6 +562,10 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             modified_offer = self._enable_audio_sendrecv(offer_sdp)
             audio_was_rewritten = modified_offer != offer_sdp
             offer_sdp = modified_offer
+
+            # Inject synthetic audio SSRC — the device needs a sender endpoint
+            # to enable audio transmission (the mobile app has a real mic track)
+            offer_sdp = self._inject_audio_ssrc(offer_sdp)
 
             active_call = self.coordinator.active_call
             if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
