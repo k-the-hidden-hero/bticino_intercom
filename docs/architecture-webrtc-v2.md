@@ -4,25 +4,27 @@
 > event entity migration, and two-way audio in the BTicino Intercom integration.
 > Written to be self-contained — a new session can pick this up without prior context.
 >
-> **Date**: 2026-04-01 (updated end of session)
+> **Date**: 2026-04-17 (updated with confirmed findings)
 > **Branch**: `dev/webrtc` (based on `main` v1.9.2)
-> **Status**: WebRTC code complete, event entity done, 107 tests green. Blocked on real device test.
+> **Status**: WebRTC live video working (offer mode). Event entity done. Two-way audio mechanism confirmed. Release pending.
 
 ---
 
 ## Table of Contents
 
 1. [Current State](#1-current-state)
-2. [Industry Research — How Others Do It](#2-industry-research)
-3. [Recommended Architecture (Ring+Nest+UniFi Mix)](#3-recommended-architecture)
-4. [WebRTC Implementation Guide](#4-webrtc-implementation-guide)
-5. [Event Entity Migration](#5-event-entity-migration)
-6. [Two-Way Audio](#6-two-way-audio)
-7. [SDP Answer Fixing](#7-sdp-answer-fixing)
-8. [Session Management](#8-session-management)
-9. [ICE / TURN / STUN](#9-ice-turn-stun)
-10. [Code References](#10-code-references)
-11. [Remaining Work Checklist](#11-remaining-work-checklist)
+2. [Key Findings](#2-key-findings)
+3. [Industry Research — How Others Do It](#3-industry-research)
+4. [Recommended Architecture (Ring+Nest+UniFi Mix)](#4-recommended-architecture)
+5. [WebRTC Implementation Guide](#5-webrtc-implementation-guide)
+6. [Event Entity Migration](#6-event-entity-migration)
+7. [Two-Way Audio](#7-two-way-audio)
+8. [SDP Answer Fixing](#8-sdp-answer-fixing)
+9. [Session Management](#9-session-management)
+10. [ICE / TURN / STUN](#10-ice-turn-stun)
+11. [Code References](#11-code-references)
+12. [Remaining Work Checklist](#12-remaining-work-checklist)
+13. [References](#13-references)
 
 ---
 
@@ -36,15 +38,18 @@
 - **Reauth flow**, diagnostics endpoint, quality_scale.yaml
 - **92 tests** passing
 
-### What exists on `dev/webrtc` (committed and pushed)
+### What exists on `dev/webrtc` (v2.0.0-rc1)
 
 - `SignalingClient` in pybticino — connects to `wss://app-ws.netatmo.net/appws/`
 - Camera entity with full `async_handle_async_webrtc_offer` (ICE buffering, error handling, terminate)
 - Enhanced coordinator event processing (RTC offer/rescind/terminate + status events)
 - **Event entity** (`event.py`) with `EventDeviceClass.DOORBELL` alongside binary_sensor
 - **107 tests green**, lint clean, full mock_setup_entry fixture
-- **Signaling validated**: offer sent to Netatmo server, ack received, session established
-- Device responded "Max number of peers reached" (not a bug — other sessions were active)
+- **WebRTC live video working** in offer mode (on-demand viewing)
+- **Multi-camera support**: one camera entity per BNEU external unit module
+- **Per-module call session tracking** with retransmission deduplication
+- **Real-time snapshot/vignette** from `incoming_call` push events
+- SDP manipulation methods exist in camera.py but are disabled (audio hacks not needed)
 
 ### Key discoveries from reverse engineering
 
@@ -52,6 +57,9 @@
 - **Ack format**: `{type: "ack", session_id, tag_id, correlation_id, status: "ok"}`
 - **Terminate with error**: `{type: "rtc", data: {type: "terminate", error: {code: 1, message: "..."}}}`
 - **TURN endpoint**: `/turn` returns 404 — correct path not yet found (not blocking for LAN)
+- **Session timeout**: ~30s in offer mode (device-side behavior, not configurable)
+- **Device mic activation**: requires real RTP audio packets, not just SDP `sendrecv`
+- **Answer mode vs offer mode**: different signaling flows (see pybticino docs for details)
 
 ### Repository structure
 
@@ -76,11 +84,52 @@ bticino_intercom/
 
 ---
 
-## 2. Industry Research
+## 2. Key Findings
+
+These are confirmed findings from real device testing and reverse engineering, documented here for future reference.
+
+### Device mic requires real RTP packets
+
+The BTicino device microphone does not activate based on SDP negotiation alone. Even with `sendrecv` direction in the audio m-line, the device will not send audio from its microphone unless it receives actual RTP audio packets from the peer. This means the browser must send a real audio track (not silence, not empty). The solution is a custom Lovelace card that creates an `AudioContext` with an oscillator to generate a minimal audio signal.
+
+See: [pybticino WebRTC Audio documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-audio.md)
+
+### Session timeout ~30s in offer mode
+
+When the HA client initiates a WebRTC session (offer mode / on-demand viewing), the device terminates the session after approximately 30 seconds. This is device-side behavior and cannot be extended from the client side. The user must re-open the stream to continue viewing. This timeout does not apply in answer mode (incoming call).
+
+### HA built-in camera player mutes audio
+
+Home Assistant's built-in WebRTC camera player mutes audio by default. This is by design (HA core PR #25767) to avoid unexpected audio playback. A custom Lovelace card is needed to enable audio playback and microphone input. The companion project [bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras) provides this card.
+
+### Custom Lovelace card needed for audio
+
+Because of the HA audio muting and the device's RTP requirement, full two-way audio requires the `bticino_ha_extras` custom card, which:
+- Unmutes the audio output from the WebRTC stream
+- Creates an `AudioContext` oscillator to send real audio data
+- Enables microphone access for talk-back
+
+### Multi-camera: one entity per BNEU module
+
+Each BNEU (external unit) module in the BTicino topology gets its own camera entity. This allows homes with multiple entrance cameras to view each independently. The entity unique ID includes the module ID for deduplication.
+
+### Answer mode vs offer mode signaling
+
+Two distinct WebRTC signaling flows exist:
+- **Offer mode** (on-demand): HA sends SDP offer to device via Netatmo cloud, device responds with SDP answer. Used for live viewing.
+- **Answer mode** (incoming call): device sends SDP offer via push WebSocket when someone rings. HA (or the app) responds with an SDP answer to join the call.
+
+The current integration implements offer mode. Answer mode is documented but not yet implemented in the camera entity.
+
+See: [pybticino WebRTC Signaling documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-signaling.md)
+
+---
+
+## 3. Industry Research
 
 Analyzed 5 major doorbell/intercom integrations in HA core to identify best patterns.
 
-### 2.1 Ring (`homeassistant/components/ring/`)
+### 3.1 Ring (`homeassistant/components/ring/`)
 
 **Why it matters**: Closest architectural match to BTicino — cloud-only, WebSocket signaling, native WebRTC.
 
@@ -108,7 +157,7 @@ Analyzed 5 major doorbell/intercom integrations in HA core to identify best patt
 - `event.py` — `RingEvent` entity with `EventDeviceClass.DOORBELL`
 - Library: `ring_doorbell` on PyPI
 
-### 2.2 Google Nest (`homeassistant/components/nest/`)
+### 3.2 Google Nest (`homeassistant/components/nest/`)
 
 **Why it matters**: Clean WebRTC implementation, good session management, vanilla ICE pattern.
 
@@ -154,7 +203,7 @@ No custom STUN/TURN — Google bundles relay candidates in the SDP answer.
 - `event.py` — `NestTraitEventEntity`
 - Library: `google-nest-sdm` on PyPI, especially `webrtc_util.py` for SDP fixing
 
-### 2.3 UniFi Protect (`homeassistant/components/unifiprotect/`)
+### 3.3 UniFi Protect (`homeassistant/components/unifiprotect/`)
 
 **Why it matters**: Best event lifecycle handling, device-driven reset, dual entity pattern.
 
@@ -179,7 +228,7 @@ No custom STUN/TURN — Google bundles relay candidates in the SDP answer.
 - `media_player.py` — `ProtectMediaPlayer` (talkback speaker)
 - `data.py` — `ProtectData` (custom coordinator with MAC-based subscriptions)
 
-### 2.4 Reolink (`homeassistant/components/reolink/`)
+### 3.4 Reolink (`homeassistant/components/reolink/`)
 
 **Why it matters**: Multi-fallback event detection, entity description pattern.
 
@@ -193,7 +242,7 @@ No custom STUN/TURN — Google bundles relay candidates in the SDP answer.
 
 Less relevant for our architecture but notable for resilient push event handling.
 
-### 2.5 Netatmo (`homeassistant/components/netatmo/`)
+### 3.5 Netatmo (`homeassistant/components/netatmo/`)
 
 **Why it matters**: Same backend API as BTicino, but their integration is basic.
 
@@ -211,7 +260,7 @@ Their doorbells (`NDB`) get camera entities for snapshots only. We're building w
 This requires a publicly accessible HTTPS URL on port 443, or Nabu Casa cloudhook.
 Our WebSocket approach is superior — works behind NAT, no public URL needed.
 
-### 2.6 Summary Comparison Table
+### 3.6 Summary Comparison Table
 
 | | Ring | Nest | UniFi | Reolink | Netatmo | **BTicino** |
 |---|---|---|---|---|---|---|
@@ -227,7 +276,7 @@ Video is always on-demand. The doorbell ring is just a notification trigger.
 
 ---
 
-## 3. Recommended Architecture (Ring+Nest+UniFi Mix)
+## 4. Recommended Architecture (Ring+Nest+UniFi Mix)
 
 ### Design principle
 
@@ -260,9 +309,9 @@ UniFi   (5%) — Device-driven event reset, dual entity during migration
 
 ---
 
-## 4. WebRTC Implementation Guide
+## 5. WebRTC Implementation Guide
 
-### 4.1 Camera entity structure
+### 5.1 Camera entity structure
 
 Follow Ring's pattern. The camera entity must override three methods:
 
@@ -305,7 +354,7 @@ class BticinoWebRTCCamera(Camera):
 is overridden (camera `__init__.py` lines 461-462 in HA core). Just override it and set
 `CameraEntityFeature.STREAM`.
 
-### 4.2 Signaling flow (via pybticino SignalingClient)
+### 5.2 Signaling flow (via pybticino SignalingClient)
 
 Our flow mirrors Ring's but uses Netatmo's WebSocket:
 
@@ -329,7 +378,7 @@ Browser                  HA (camera.py)              pybticino              Neta
    |====== WebRTC media flows directly browser <-> Netatmo TURN/STUN =========|
 ```
 
-### 4.3 What to implement in pybticino vs bticino_intercom
+### 5.3 What to implement in pybticino vs bticino_intercom
 
 | Layer | Component | Responsibility |
 |---|---|---|
@@ -340,16 +389,16 @@ Browser                  HA (camera.py)              pybticino              Neta
 
 ---
 
-## 5. Event Entity Migration
+## 6. Event Entity Migration
 
-### 5.1 Current state
+### 6.1 Current state
 
 Doorbell ring is a `binary_sensor` in `binary_sensor.py` that:
 - Turns ON when an RTC `call` event is received via WebSocket
 - Turns OFF after 30s timeout or when `terminate` is received
 - Uses `SIGNAL_CALL_RECEIVED` dispatcher signal
 
-### 5.2 Target state (following Ring's pattern)
+### 6.2 Target state (following Ring's pattern)
 
 Add an `event` entity alongside the binary_sensor:
 
@@ -380,13 +429,13 @@ class BticinoDoorbellEvent(BticinoEntity, EventEntity):
         self.async_write_ha_state()
 ```
 
-### 5.3 Migration strategy (following UniFi's dual pattern)
+### 6.3 Migration strategy (following UniFi's dual pattern)
 
 1. **v2.0**: Add `event` entity, keep `binary_sensor` — both fire from same WS event
 2. **v2.1**: Deprecate `binary_sensor` with HA repair issue (like Ring did in 2025.4)
 3. **v2.2**: Remove `binary_sensor`
 
-### 5.4 Event lifecycle improvement (from UniFi)
+### 6.4 Event lifecycle improvement (from UniFi)
 
 Current: 30s hardcoded timeout for binary_sensor auto-off.
 Improved:
@@ -396,9 +445,9 @@ Improved:
 
 ---
 
-## 6. Two-Way Audio
+## 7. Two-Way Audio
 
-### 6.1 How Ring does it
+### 7.1 How Ring does it
 
 Two-way audio is NOT a separate feature — it's part of the WebRTC stream:
 - The `stream_options` include `audio_enabled: True`
@@ -406,7 +455,7 @@ Two-way audio is NOT a separate feature — it's part of the WebRTC stream:
 - Ring's SDP answer includes `sendrecv` for audio
 - Result: bidirectional audio via standard WebRTC
 
-### 6.2 How to implement for BTicino
+### 7.2 How to implement for BTicino
 
 1. Ensure the SDP offer from the browser includes audio `sendrecv`
    (HA frontend does this when the camera supports `CameraEntityFeature.STREAM`)
@@ -415,20 +464,27 @@ Two-way audio is NOT a separate feature — it's part of the WebRTC stream:
 4. If the answer has `sendrecv` for audio → two-way audio works automatically
 5. If not → we may need to modify the SDP or it may be a device limitation
 
-### 6.3 Fallback if native two-way audio doesn't work
+### 7.3 Confirmed behavior (from real device testing)
 
-If Netatmo's WebRTC doesn't support bidirectional audio:
-- **Option A**: SDP manipulation — force `sendrecv` in the answer
-- **Option B**: Separate audio channel (would need reverse engineering)
-- **Option C**: Accept receive-only audio (user can see+hear but not talk)
+The device **does** negotiate `sendrecv` for audio in the SDP answer, but its microphone only activates when it receives real RTP audio packets. SDP negotiation alone is not sufficient.
 
-Don't pre-optimize — try the simple path first (just pass the offer with audio).
+**What works**:
+- Receiving audio from the device (hearing the visitor) works once the device mic is activated
+- Sending audio from the browser to the device speaker works via standard WebRTC
+
+**What is needed**:
+- A custom Lovelace card (`bticino_ha_extras`) that uses an `AudioContext` oscillator to send a minimal audio signal, which triggers the device mic
+- HA's built-in camera player mutes audio (by design), so the custom card is also needed to unmute playback
+
+**SDP hacks disabled**: `camera.py` contains SDP manipulation methods (direction forcing, codec reordering) that were explored during development. These are currently disabled because the root cause is not SDP-related but rather the device's RTP packet requirement.
+
+See: [pybticino WebRTC Audio documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-audio.md)
 
 ---
 
-## 7. SDP Answer Fixing
+## 8. SDP Answer Fixing
 
-### 7.1 Why it's needed
+### 8.1 Why it's needed
 
 Both Ring and Nest fix the SDP answer from the cloud. Common issues:
 
@@ -437,7 +493,7 @@ Both Ring and Nest fix the SDP answer from the cloud. Common issues:
 2. **Codec ordering**: Cloud may reorder codecs in a way browsers don't like.
 3. **Missing attributes**: Some required SDP attributes may be missing.
 
-### 7.2 Reference implementations
+### 8.2 Reference implementations
 
 **Ring** (`ring_doorbell/webrtcstream.py`):
 ```python
@@ -451,7 +507,7 @@ def fix_sdp_answer(answer: str, offer: str) -> str:
     # Matches direction in answer to what offer requested
 ```
 
-### 7.3 Our implementation plan
+### 8.3 Our implementation plan
 
 1. First, capture raw SDP answers from Netatmo signaling (log them)
 2. Test without fixing — may work as-is
@@ -460,9 +516,9 @@ def fix_sdp_answer(answer: str, offer: str) -> str:
 
 ---
 
-## 8. Session Management
+## 9. Session Management
 
-### 8.1 Pattern (from Nest)
+### 9.1 Pattern (from Nest)
 
 ```python
 class BticinoWebRTCCamera(Camera):
@@ -488,7 +544,7 @@ class BticinoWebRTCCamera(Camera):
             self.close_webrtc_session(session_id)
 ```
 
-### 8.2 Session refresh (from Nest's StreamRefresh)
+### 9.2 Session refresh (from Nest's StreamRefresh)
 
 Netatmo WebRTC sessions likely have a timeout. Implement refresh:
 - Track `expires_at` per session
@@ -498,9 +554,9 @@ Netatmo WebRTC sessions likely have a timeout. Implement refresh:
 
 ---
 
-## 9. ICE / TURN / STUN
+## 10. ICE / TURN / STUN
 
-### 9.1 Strategy: try vanilla ICE first (Nest pattern)
+### 10.1 Strategy: try vanilla ICE first (Nest pattern)
 
 ```python
 async def async_on_webrtc_candidate(self, session_id, candidate):
@@ -515,7 +571,7 @@ async def async_on_webrtc_candidate(self, session_id, candidate):
         await self._signaling.send_ice_candidate(stream, candidate)
 ```
 
-### 9.2 TURN server discovery
+### 10.2 TURN server discovery
 
 Current state: `/turn` endpoint returns 404.
 
@@ -525,7 +581,7 @@ Options to investigate:
 3. Check if TURN candidates are bundled in Netatmo's SDP answer
 4. If Netatmo provides TURN in the SDP → we don't need to discover the endpoint at all
 
-### 9.3 Client configuration
+### 10.3 Client configuration
 
 ```python
 def _async_get_webrtc_client_configuration(self) -> WebRTCClientConfiguration:
@@ -541,9 +597,9 @@ def _async_get_webrtc_client_configuration(self) -> WebRTCClientConfiguration:
 
 ---
 
-## 10. Code References
+## 11. Code References
 
-### 10.1 HA Core WebRTC infrastructure
+### 11.1 HA Core WebRTC infrastructure
 
 These are the HA core classes our camera entity must interact with:
 
@@ -560,7 +616,7 @@ These are the HA core classes our camera entity must interact with:
 | `EventEntity` | `homeassistant/components/event/__init__.py` | Base class for event entities |
 | `EventDeviceClass.DOORBELL` | `homeassistant/components/event/__init__.py` | Device class for doorbell events |
 
-### 10.2 Reference integration code to study
+### 11.2 Reference integration code to study
 
 **Ring WebRTC** (most relevant):
 ```
@@ -588,7 +644,7 @@ homeassistant/components/unifiprotect/binary_sensor.py — _event_already_ended
 homeassistant/components/unifiprotect/event.py         — dual event+binary_sensor
 ```
 
-### 10.3 Our codebase (current key files)
+### 11.3 Our codebase (current key files)
 
 | File | Lines | Key content |
 |---|---|---|
@@ -598,7 +654,7 @@ homeassistant/components/unifiprotect/event.py         — dual event+binary_sen
 | `binary_sensor.py` | ~280 | Call sensor — will add event entity alongside |
 | `const.py` | ~70 | `SIGNAL_CALL_RECEIVED`, module subtypes |
 
-### 10.4 pybticino (our library)
+### 11.4 pybticino (our library)
 
 | File | Key content |
 |---|---|
@@ -609,29 +665,32 @@ homeassistant/components/unifiprotect/event.py         — dual event+binary_sen
 
 ---
 
-## 11. Remaining Work Checklist
+## 12. Remaining Work Checklist
 
-> **Last updated**: 2026-04-01 end of session
+> **Last updated**: 2026-04-17
 
-### Phase 1: WebRTC Live Video (core)
+### Phase 1: WebRTC Live Video (core) -- DONE
 
-- [ ] Test WebRTC offer with free device (no other active sessions)
-- [ ] Capture and log raw SDP answer from Netatmo
+- [x] ~~Test WebRTC offer with free device (no other active sessions)~~ (done: video live works)
+- [x] ~~Capture and log raw SDP answer from Netatmo~~ (done: documented in pybticino)
 - [x] ~~Implement `async_handle_async_webrtc_offer` fully in camera.py~~ (done: camera.py with full signaling flow, ICE buffering, error handling)
-- [ ] Determine ICE strategy (vanilla vs trickle) based on Netatmo's SDP answer
+- [x] ~~Determine ICE strategy (vanilla vs trickle) based on Netatmo's SDP answer~~ (done: ICE timing fixed)
 - [x] ~~Implement `close_webrtc_session` with terminate signaling~~ (done: sends terminate via SignalingClient)
 - [x] ~~Add session tracking~~ (done: via SignalingClient session_id)
-- [ ] Test end-to-end: browser → HA → Netatmo → video playing
+- [x] ~~Test end-to-end: browser -> HA -> Netatmo -> video playing~~ (done: offer mode working)
 
-### Phase 2: Robustness
+See [pybticino WebRTC Signaling documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-signaling.md) for protocol details.
 
-- [ ] Implement SDP answer fixing if needed (based on Phase 1 observations)
-- [ ] Add session refresh/keepalive mechanism
+### Phase 2: Robustness -- PARTIAL
+
+- [x] ~~Implement SDP answer fixing if needed~~ (done: SDP hacks explored and disabled -- not needed for basic flow)
+- [ ] Add session refresh/keepalive mechanism (not possible -- device terminates at ~30s in offer mode)
 - [x] ~~Handle `WebRTCError` for error cases~~ (done: on_event callback sends WebRTCError to frontend)
-- [ ] Implement `_async_get_webrtc_client_configuration` with STUN/TURN if needed
-- [ ] Find correct TURN endpoint (or confirm it's not needed in LAN)
+- [x] ~~ICE timing fixed~~ (done: resolved ICE candidate delivery timing)
+- [x] ~~Session cleanup works~~ (done: terminate sent on close)
+- [ ] Find correct TURN endpoint (returns 404 -- not blocking for LAN, investigate for remote access)
 
-### Phase 3: Event Entity
+### Phase 3: Event Entity -- DONE
 
 - [x] ~~Create `event.py` with `BticinoDoorbellEvent` (EventDeviceClass.DOORBELL)~~ (done: 2026-04-01)
 - [x] ~~Wire to `SIGNAL_CALL_RECEIVED` dispatcher~~ (done: fires "ring" on state=True)
@@ -639,18 +698,21 @@ homeassistant/components/unifiprotect/event.py         — dual event+binary_sen
 - [x] ~~Keep binary_sensor for backwards compat (dual entity like UniFi)~~ (done: both coexist)
 - [ ] Use `terminate` WS event as primary reset for binary_sensor (currently uses 30s timeout)
 
-### Phase 4: Two-Way Audio
+### Phase 4: Two-Way Audio -- CONFIRMED
 
-- [ ] Test if Netatmo's SDP answer includes sendrecv for audio
-- [ ] If yes: two-way audio works automatically via WebRTC
-- [ ] If no: investigate SDP manipulation or alternative approaches
+- [x] ~~Test if Netatmo's SDP answer includes sendrecv for audio~~ (confirmed: yes, device negotiates sendrecv)
+- [x] ~~Determine audio activation mechanism~~ (confirmed: device mic requires real RTP audio packets)
+- [x] ~~Solution identified~~ (confirmed: custom card with AudioContext oscillator, see bticino_ha_extras)
+- [x] ~~SDP manipulation methods disabled~~ (done: audio hacks not needed, root cause is RTP not SDP)
 
-### Phase 5: Release
+See [pybticino WebRTC Audio documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-audio.md) for the full analysis.
 
-- [ ] Bump to v2.0.0
+### Phase 5: Release -- PENDING
+
+- [x] ~~Bump to v2.0.0-rc1~~ (done: pre-release tag)
 - [ ] Update README with WebRTC/live video documentation
 - [ ] Test on production HA (dev tag first, then final)
-- [ ] Update pybticino if signaling changes needed
+- [ ] Final v2.0.0 release
 
 ### Test Infrastructure (added 2026-04-01)
 
@@ -708,3 +770,30 @@ homeassistant/components/unifiprotect/event.py         — dual event+binary_sen
 ### Test credentials
 
 Stored in `.credentials` file (gitignored). Dev account: see memory reference.
+
+---
+
+## 13. References
+
+### pybticino documentation
+
+- **WebRTC Signaling Protocol**: https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-signaling.md
+  Detailed protocol documentation for WebRTC signaling via Netatmo cloud, including offer/answer mode flows, message formats, and session lifecycle.
+
+- **WebRTC Audio Mechanism**: https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-audio.md
+  Analysis of the device mic activation behavior, RTP packet requirement, and the AudioContext oscillator solution.
+
+- **Reverse Engineering Notes**: https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/reverse-engineering-notes.md
+  Raw findings from APK decompilation and traffic capture of the Home+Security app.
+
+### Companion projects
+
+- **bticino_ha_extras**: https://github.com/k-the-hidden-hero/bticino_ha_extras
+  Custom Lovelace cards and automation blueprints for the BTicino integration, including the WebRTC audio card with microphone support.
+
+### Home Assistant references
+
+- **HA WebRTC Camera API**: `homeassistant/components/camera/__init__.py` and `webrtc.py`
+- **HA audio muting**: PR #25767 (by design, built-in player mutes WebRTC audio)
+- **Ring integration** (closest architectural match): `homeassistant/components/ring/`
+- **Nest integration** (session management reference): `homeassistant/components/nest/`

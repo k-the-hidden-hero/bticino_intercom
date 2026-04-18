@@ -6,7 +6,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/issues)
 [![License](https://img.shields.io/github/license/k-the-hidden-hero/bticino_intercom)](LICENSE)
 
-A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems. Monitor calls, control door locks, manage staircase lights, and view event snapshots — all from your Home Assistant dashboard.
+A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
 
 Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Uses a persistent WebSocket connection for real-time call notifications and periodic polling for state synchronization.
 
@@ -22,17 +22,27 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 
 ## Features
 
+### v2.0 Highlights
+
+- **WebRTC live video streaming** — On-demand live view from your intercom cameras, directly in the Home Assistant dashboard. Uses native WebRTC via the Netatmo cloud (no go2rtc or RTSP needed).
+- **Doorbell event entity** — Modern `EventDeviceClass.DOORBELL` entity for doorbell ring detection, alongside the existing binary sensor for backwards compatibility.
+- **Real-time snapshots** — Snapshot and vignette images from incoming call push events, available instantly when someone rings.
+- **Multi-camera support** — One camera entity per external unit (BNEU module). Homes with multiple entrance cameras can view each independently.
+- **Per-module call tracking** — Call sessions tracked per module with retransmission deduplication, ensuring reliable event processing.
+- **Two-way audio** — Hear the visitor and talk back via WebRTC. Requires the [bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras) custom card (HA's built-in camera player mutes audio by design).
+
 ### Entities
 
 | Entity type | What it does |
 |---|---|
+| **Camera** | WebRTC live video streaming and event snapshots. One entity per external unit. |
+| **Event** | Doorbell ring detection (`EventDeviceClass.DOORBELL`). Fires on incoming calls. |
 | **Lock** | Control door locks (BNDL modules). Open/close with optimistic state and automatic relock timer. |
 | **Binary Sensor** | Real-time incoming call detection (BNEU external units). Auto-off after 30 seconds. |
 | **Sensor — Last Event** | Shows the last call event type (incoming, answered elsewhere, terminated) with timestamp and snapshot URLs. |
 | **Sensor — Last Call Timestamp** | Timestamp sensor for the most recent completed call. |
 | **Sensor — Bridge Diagnostics** | Uptime, WiFi strength, WebSocket status, local IP, last seen, last config update. |
 | **Light** | Staircase lights (BNSL modules). On/off control. |
-| **Camera** | Last event snapshot and vignette images, fetched from the Netatmo cloud. |
 
 ### Real-time events
 
@@ -52,6 +62,16 @@ Ready-to-use blueprints for common intercom automations. Click a button to impor
 | **Auto-Open on Schedule** | Automatically open the door during a time window (e.g., for deliveries) | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdoorbell_auto_open.yaml) |
 | **Snapshot to Service** | Save snapshot to file and fire an event for face recognition or logging | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdoorbell_snapshot_to_service.yaml) |
 | **Missed Call Log** | Get notified when a doorbell call goes unanswered | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fmissed_call_log.yaml) |
+
+### Companion: bticino_ha_extras
+
+For the full experience, check out [bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras) — a companion repository with:
+
+- **Custom Lovelace card** for WebRTC video with audio support (unmuted playback + microphone talk-back)
+- Additional automation blueprints
+
+> [!NOTE]
+> Home Assistant's built-in camera player mutes WebRTC audio by design. The custom card from `bticino_ha_extras` is required to hear the visitor and talk back through the intercom.
 
 ### Light as Lock mode
 
@@ -150,6 +170,10 @@ BTicino Intercom <---> Netatmo Cloud <---> Home Assistant
                     +-----------+
                     | WebSocket |  Real-time push (call events, state changes)
                     +-----------+
+                    | Signaling |  WebRTC offer/answer exchange (live video)
+                    +-----------+
+                    |  WebRTC   |  Direct media (video + audio) via STUN/TURN
+                    +-----------+
 ```
 
 ### WebSocket connection
@@ -169,7 +193,8 @@ A **watchdog** monitors WebSocket health: if no messages are received for 10 min
 1. **Startup**: authenticates via OAuth2, fetches home topology, creates entities
 2. **Polling** (every 5 min): refreshes module status, event history, bridge diagnostics
 3. **WebSocket push**: real-time call events (ring, answer, terminate) update entities immediately
-4. **Actions**: lock/unlock and light on/off send commands via the REST API
+4. **WebRTC signaling**: on-demand live video via a separate signaling WebSocket (`appws/`)
+5. **Actions**: lock/unlock and light on/off send commands via the REST API
 
 ---
 
@@ -213,7 +238,7 @@ Found a bug or want a feature? [Open an issue](https://github.com/k-the-hidden-h
 
 Pull requests are welcome. The project uses:
 - **ruff** for linting and formatting
-- **pytest** with `pytest-homeassistant-custom-component` for testing (87 tests)
+- **pytest** with `pytest-homeassistant-custom-component` for testing (107 tests)
 - **bandit** for security scanning
 - CI runs on every push and PR
 
