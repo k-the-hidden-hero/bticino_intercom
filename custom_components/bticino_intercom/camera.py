@@ -1,5 +1,6 @@
 """Platform for camera integration."""
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -271,6 +272,17 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
     ICE candidates from the browser are buffered until the signaling session
     is established (the ack from the server can take 1-2 seconds).
+
+    Browser compatibility:
+        Chrome/Chromium: Full support (video + audio).
+        Firefox: NOT SUPPORTED. The BTicino device firmware uses hardcoded
+        Chrome-compatible RTP payload type numbers (PT=111 for Opus, PT=109
+        for H264) regardless of what is negotiated in the SDP. Firefox uses
+        different PT assignments (PT=109 for Opus, PT=126 for H264) and
+        drops packets with unrecognized PTs. This causes video to never
+        render despite ICE connecting and DTLS/SRTP completing successfully.
+        This is a device firmware limitation, not fixable from the integration
+        side. See docs/firefox-webrtc-investigation.md for full analysis.
     """
 
     _attr_has_entity_name = True
@@ -494,6 +506,33 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 sdp_m_line_index=candidate.sdp_m_line_index or 0,
             )
         self._pending_candidates.clear()
+
+    async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
+        """Handle a sync WebRTC offer (used by go2rtc proxy).
+
+        go2rtc uses the older sync protocol: send offer, get answer string back.
+        This wraps our async implementation by collecting the answer via an Event.
+        """
+        answer_event = asyncio.Event()
+        answer_sdp: list[str] = []
+
+        def collect_message(msg: WebRTCAnswer | WebRTCCandidate | WebRTCError) -> None:
+            if isinstance(msg, WebRTCAnswer):
+                answer_sdp.append(msg.answer)
+                answer_event.set()
+            elif isinstance(msg, WebRTCError):
+                _LOGGER.warning("go2rtc sync offer error: %s", msg.message)
+                answer_event.set()
+
+        await self.async_handle_async_webrtc_offer(offer_sdp, "go2rtc", collect_message)
+
+        try:
+            await asyncio.wait_for(answer_event.wait(), timeout=30)
+        except TimeoutError:
+            _LOGGER.error("Timeout waiting for WebRTC answer (go2rtc sync)")
+            return None
+
+        return answer_sdp[0] if answer_sdp else None
 
     async def async_handle_async_webrtc_offer(
         self,

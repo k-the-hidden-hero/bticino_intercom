@@ -58,6 +58,7 @@ The integration supports WebRTC live video streaming via the Netatmo cloud.
 - **SDP manipulation**: `camera.py` contains SDP manipulation methods (direction forcing, codec reordering) that were explored during development. These are currently disabled because the audio issue is RTP-related, not SDP-related.
 - **Session timeout**: ~30s in offer mode (device-side behavior, not configurable from the client).
 - **Event entity**: `event.py` provides `EventDeviceClass.DOORBELL` alongside the existing `binary_sensor` for doorbell ring detection (dual entity pattern, following UniFi's approach).
+- **Browser compatibility**: Chrome/Chromium only. Firefox is NOT supported due to a device firmware bug: the BTicino BNC1 uses hardcoded Chrome-compatible RTP payload type numbers (PT=111/Opus, PT=109/H264) regardless of SDP negotiation. Firefox uses different PTs and drops the mismatched packets. DTLS and SRTP work correctly in Firefox — the issue is exclusively at the RTP payload type layer. See `docs/firefox-webrtc-investigation.md` for the full analysis.
 
 For protocol details, see the [pybticino WebRTC documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-signaling.md).
 
