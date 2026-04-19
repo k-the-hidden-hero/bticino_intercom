@@ -138,6 +138,27 @@ async def test_answer_mode_only_for_matching_module(
     signaling.send_answer.assert_not_called()
 
 
+async def test_answer_mode_uses_device_sdp(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """When active_call exists, camera should use answer mode."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+
+    device_sdp = "v=0\r\no=- 123 IN IP4 0.0.0.0\r\ns=-\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=setup:actpass\r\n"
+    coordinator._active_call = {
+        "session_id": "test-session",
+        "module_id": "00:03:50:d9:a6:3b",
+        "sdp": device_sdp,
+        "tag_id": "tag",
+        "correlation_id": "corr",
+        "device_id": "dev",
+    }
+
+    assert coordinator.active_call is not None
+    assert coordinator.active_call["sdp"] == device_sdp
+
+
 async def test_offer_mode_when_no_active_call(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
