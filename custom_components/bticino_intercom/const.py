@@ -77,3 +77,15 @@ IMAGE_CACHE_SECONDS = 300  # 5 minutes
 CALL_RETRANSMIT_WINDOW = 15
 # Absolute cap on session duration, last safety net.
 CALL_SESSION_MAX_DURATION = 180
+
+# --- Event history ---
+HISTORY_STORAGE_VERSION = 1
+HISTORY_DEFAULT_RETENTION_DAYS = 30
+HISTORY_DEFAULT_MAX_EVENTS = 500
+HISTORY_MAX_RETENTION_DAYS = 365
+HISTORY_MAX_MAX_EVENTS = 5000
+
+# Option keys (kept as plain strings to avoid breaking existing entries)
+OPT_HISTORY_ENABLED = "history_enabled"
+OPT_HISTORY_RETENTION_DAYS = "history_retention_days"
+OPT_HISTORY_MAX_EVENTS = "history_max_events"

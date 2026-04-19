@@ -33,6 +33,7 @@ from .const import (
     SIGNAL_CALL_RECEIVED,
     UPDATE_INTERVAL,
 )
+from .history import EventHistoryStore
 
 # WebSocket is considered stale if no message received for this many seconds.
 # The server sends periodic pings (every 20s) that count as messages in the
@@ -81,10 +82,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._ws_stale = False
         # Per-module active call sessions for retransmission dedup.
         # {"started": datetime, "last_seen": datetime,
-        #  "watchdog": asyncio.Task | None}
+        #  "watchdog": asyncio.Task | None,
+        #  "session_id": str | None}
         self._active_calls: dict[str, dict[str, Any]] = {}
         # Current active call for WebRTC signaling (offer/answer SDP exchange)
         self._active_call: dict[str, Any] | None = None
+        # Populated by __init__.py after entry setup.
+        self.history: EventHistoryStore | None = None
 
     @property
     def main_device_id(self) -> str | None:
@@ -359,6 +363,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if rtc_action == "rescind":
             _LOGGER.info("Call answered elsewhere (RTC rescind) for %s", display_name)
 
+            closing_session_id = session_id or self._active_calls.get(calling_module_id or display_id, {}).get(
+                "session_id"
+            )
             dedup_id = calling_module_id or display_id
             self._end_call_session(dedup_id, reason="rescind")
             if calling_module_id:
@@ -370,11 +377,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 {"name": f"Call Answered Elsewhere ({display_name})", "module_id": display_id},
             )
             self._update_last_event(EVENT_TYPE_ANSWERED_ELSEWHERE, display_id, display_name, message, extra_params)
+            self._close_history_event(closing_session_id, EVENT_TYPE_ANSWERED_ELSEWHERE)
             return True
 
         if rtc_action == "terminate":
             _LOGGER.info("Call terminated (RTC terminate) for %s", display_name)
 
+            closing_session_id = session_id or self._active_calls.get(calling_module_id or display_id, {}).get(
+                "session_id"
+            )
             dedup_id = calling_module_id or display_id
             self._end_call_session(dedup_id, reason="terminate")
             if calling_module_id:
@@ -386,6 +397,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 {"name": f"Call Terminated ({display_name})", "module_id": display_id},
             )
             self._update_last_event(EVENT_TYPE_TERMINATED, display_id, display_name, message, extra_params)
+            self._close_history_event(closing_session_id, EVENT_TYPE_TERMINATED)
             return True
 
         return False
@@ -408,22 +420,50 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             vignette_url = extra_params.get("vignette_url")
             timestamp = extra_params.get("timestamp")
 
-            self.data[DATA_LAST_EVENT] = {
-                "type": EVENT_TYPE_INCOMING_CALL,
-                "timestamp": datetime.now(UTC),
-                "time": timestamp,
-                "module_id": device_id,
-                "module_name": device_name,
-                "session_id": extra_params.get("session_id"),
-                "event_id": extra_params.get("event_id"),
-                "snapshot_url": snapshot_url,
-                "vignette_url": vignette_url,
-            }
+            now_ts = int(datetime.now(UTC).timestamp())
+            subevent: dict[str, Any] = {"time": now_ts}
+            if snapshot_url:
+                subevent["snapshot"] = {"url": snapshot_url}
+            if vignette_url:
+                subevent["vignette"] = {"url": vignette_url}
+
+            last_event = self.data.get(DATA_LAST_EVENT, {})
+            if last_event and last_event.get("type") == EVENT_TYPE_INCOMING_CALL:
+                last_event["subevents"] = [subevent]
+                _LOGGER.info("Enriched existing call event with snapshot/vignette from incoming_call push")
+            else:
+                self.data[DATA_LAST_EVENT] = {
+                    "type": EVENT_TYPE_INCOMING_CALL,
+                    "timestamp": datetime.now(UTC),
+                    "time": timestamp,
+                    "module_id": device_id,
+                    "module_name": device_name,
+                    "session_id": extra_params.get("session_id"),
+                    "event_id": extra_params.get("event_id"),
+                    "snapshot_url": snapshot_url,
+                    "vignette_url": vignette_url,
+                    "subevents": [subevent],
+                }
 
             self.hass.bus.async_fire(
                 EVENT_LOGBOOK_INCOMING_CALL,
                 {"name": f"Incoming Call ({device_name})", "module_id": device_id},
             )
+
+            if self.history is not None and device_id:
+                event_id = extra_params.get("session_id") or f"{now_ts}-{device_id}"
+                self.hass.async_create_background_task(
+                    self.history.async_record_call(
+                        event_id=event_id,
+                        module_id=device_id,
+                        module_name=device_name,
+                        snapshot_url=snapshot_url,
+                        vignette_url=vignette_url,
+                        event_timestamp=now_ts,
+                    ),
+                    name=f"{DOMAIN} history record {event_id}",
+                )
+
             return True
 
         if event_type == "missed_call":
@@ -485,14 +525,32 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         extra_params: dict[str, Any],
     ) -> None:
         """Update the last event data from an RTC event."""
+        session_data = extra_params.get("data", {}).get("session_description", {})
+
+        subevents_data = session_data.get("subevents")
+        if not subevents_data:
+            existing = self.data.get(DATA_LAST_EVENT, {}).get("subevents")
+            if existing:
+                subevents_data = existing
+
         self.data[DATA_LAST_EVENT] = {
             "type": event_type,
             "timestamp": datetime.now(UTC),
-            "time": extra_params.get("data", {}).get("session_description", {}).get("time"),
+            "time": session_data.get("time"),
             "module_id": module_id,
             "module_name": module_name,
             "session_id": extra_params.get("session_id"),
+            "subevents": subevents_data,
         }
+
+    def _close_history_event(self, event_id: str | None, event_type: str) -> None:
+        """Schedule history record closure for the given session id."""
+        if self.history is None or not event_id:
+            return
+        self.hass.async_create_background_task(
+            self.history.async_close_call(event_id=event_id, event_type=event_type),
+            name=f"{DOMAIN} history close {event_id}",
+        )
 
     def _end_call_session(self, module_id: str, reason: str) -> None:
         """Close an active call session and cancel its watchdog."""
