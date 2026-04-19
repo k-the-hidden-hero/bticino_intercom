@@ -6,11 +6,14 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pybticino.exceptions import ApiError, AuthError
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 
 from custom_components.bticino_intercom.const import DOMAIN
 
-from .conftest import HOME_ID
+from .conftest import EXTERNAL_UNIT_ID, HOME_ID, _setup_integration
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -121,3 +124,71 @@ async def test_coordinator_has_data_after_setup(
     assert "homes" in coordinator.data
     assert coordinator.home_id == HOME_ID
     assert coordinator.main_device_id is not None
+
+
+async def test_reject_call_service(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
+) -> None:
+    """Test reject_call service terminates the active call."""
+    entry = await _setup_integration(
+        hass,
+        mock_config_entry,
+        mock_auth_handler,
+        mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    signaling_client = hass.data[DOMAIN][entry.entry_id]["signaling_client"]
+
+    # Simulate an active call
+    coordinator._active_call = {
+        "session_id": "test-session",
+        "module_id": EXTERNAL_UNIT_ID,
+    }
+
+    events = async_capture_events(hass, "bticino_intercom_call")
+
+    await hass.services.async_call(DOMAIN, "reject_call", blocking=True)
+    await hass.async_block_till_done()
+
+    assert coordinator._active_call is None
+    signaling_client.send_terminate.assert_called_once()
+    end_events = [e for e in events if e.data.get("type") == "end"]
+    assert len(end_events) == 1
+    assert end_events[0].data["reason"] == "rejected"
+
+
+async def test_reject_call_service_no_active_call(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
+) -> None:
+    """Test reject_call service is a no-op when no call is active."""
+    entry = await _setup_integration(
+        hass,
+        mock_config_entry,
+        mock_auth_handler,
+        mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
+    signaling_client = hass.data[DOMAIN][entry.entry_id]["signaling_client"]
+
+    events = async_capture_events(hass, "bticino_intercom_call")
+
+    await hass.services.async_call(DOMAIN, "reject_call", blocking=True)
+    await hass.async_block_till_done()
+
+    signaling_client.send_terminate.assert_not_called()
+    assert len(events) == 0

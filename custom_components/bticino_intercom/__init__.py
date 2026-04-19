@@ -20,6 +20,7 @@ from homeassistant.const import (
 from homeassistant.core import (
     CoreState,  # Re-add CoreState for check
     HomeAssistant,
+    ServiceCall,
 )
 from homeassistant.core import (
     Event as HAEvent,  # Re-add HAEvent type hint
@@ -162,6 +163,59 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Add the update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
+    # Register debug service when integration logger is at DEBUG level.
+    # Protected by HA authentication — requires a valid access token.
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        import time as _time
+
+        async def _inject_test_event(call) -> None:
+            device_id = call.data.get("device_id") or next(iter(coordinator.data.get("modules", {})), None)
+            if not device_id:
+                _LOGGER.warning("inject_test_event: no modules available")
+                return
+            fake_msg = {
+                "push_type": "BNC1-incoming_call",
+                "extra_params": {
+                    "event_type": "incoming_call",
+                    "device_id": device_id,
+                    "session_id": call.data.get("session_id", f"test-{int(_time.time())}"),
+                    "snapshot_url": call.data.get("snapshot_url", "https://picsum.photos/640/480"),
+                    "vignette_url": call.data.get("vignette_url", "https://picsum.photos/160/120"),
+                },
+            }
+            _LOGGER.debug("Injecting test event: %s", fake_msg)
+            await coordinator._handle_websocket_message(fake_msg)
+
+        hass.services.async_register(DOMAIN, "inject_test_event", _inject_test_event)
+        _LOGGER.debug("Debug service 'inject_test_event' registered (logger at DEBUG)")
+
+    # --- Register reject_call service ---
+    async def _async_reject_call(call: ServiceCall) -> None:
+        """Reject the active incoming call."""
+        entry_id = call.data.get("entry_id")
+        if not entry_id:
+            entry_id = next(iter(hass.data.get(DOMAIN, {})), None)
+        if not entry_id or entry_id not in hass.data.get(DOMAIN, {}):
+            _LOGGER.warning("reject_call: no valid entry_id found")
+            return
+        entry_data = hass.data[DOMAIN][entry_id]
+        coord = entry_data[COORDINATOR_KEY]
+        sig = entry_data[SIGNALING_CLIENT_KEY]
+
+        if not coord.active_call:
+            _LOGGER.debug("reject_call: no active call to reject")
+            return
+
+        module_id = coord.active_call.get("module_id")
+        try:
+            await sig.send_terminate()
+        except Exception:
+            _LOGGER.exception("reject_call: failed to send terminate")
+        coord._fire_call_event("end", module_id, reason="rejected")
+        coord._active_call = None
+
+    hass.services.async_register(DOMAIN, "reject_call", _async_reject_call)
 
     # --- Define WebSocket Connection Manager Task and Start Logic ---
     async def _websocket_connection_manager() -> None:
