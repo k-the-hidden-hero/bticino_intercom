@@ -496,6 +496,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     "subevents": [subevent],
                 }
 
+            calling_module_id = self._active_call.get("module_id") if self._active_call else None
+            if calling_module_id:
+                self._fire_call_event(
+                    "ring",
+                    calling_module_id,
+                    snapshot_url=snapshot_url,
+                    vignette_url=vignette_url,
+                )
+
             self.hass.bus.async_fire(
                 EVENT_LOGBOOK_INCOMING_CALL,
                 {"name": f"Incoming Call ({device_name})", "module_id": device_id},

@@ -631,6 +631,21 @@ class TestCallEventEmission:
         assert len(end_events) == 1
         assert end_events[0].data["reason"] == "terminate"
 
+    async def test_status_incoming_call_fires_ring_with_images(self, hass, coordinator, ws_rtc_offer, ws_incoming_call):
+        """Status incoming_call should fire a ring event with image URLs."""
+        coordinator._process_websocket_event(ws_rtc_offer)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, "bticino_intercom_call")
+        coordinator._process_websocket_event(ws_incoming_call)
+        await hass.async_block_till_done()
+
+        ring_events = [e for e in events if e.data.get("type") == "ring"]
+        assert len(ring_events) >= 1
+        last_ring = ring_events[-1]
+        assert last_ring.data.get("snapshot_url") is not None
+        assert last_ring.data.get("vignette_url") is not None
+
     async def test_timeout_fires_end_event(self, hass, coordinator, ws_rtc_offer):
         """Binary sensor timeout should fire an end event with reason=timeout."""
         coordinator._process_websocket_event(ws_rtc_offer)
