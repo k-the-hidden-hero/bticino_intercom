@@ -53,6 +53,9 @@ EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
 EVENT_LOGBOOK_MISSED_CALL = f"{DOMAIN}_missed_call"
 EVENT_LOGBOOK_ACCEPTED_CALL = f"{DOMAIN}_accepted_call"
 
+# Frontend / automation event
+EVENT_CALL = f"{DOMAIN}_call"
+
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"
 

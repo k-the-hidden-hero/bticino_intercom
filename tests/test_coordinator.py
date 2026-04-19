@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import asyncio
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import async_capture_events
 
 from custom_components.bticino_intercom.const import (
+    CALL_RETRANSMIT_WINDOW,
+    CALL_SESSION_MAX_DURATION,
     DATA_LAST_EVENT,
     EVENT_TYPE_ACCEPTED_CALL,
     EVENT_TYPE_ANSWERED_ELSEWHERE,
@@ -433,3 +438,169 @@ class TestCallSequence:
         }
         result = coordinator._process_websocket_event(unknown)
         assert result is False
+
+
+# =============================================================================
+# Call session management
+# =============================================================================
+
+
+class TestEndCallSession:
+    """Test _end_call_session behavior."""
+
+    async def test_end_call_session_removes_entry(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Session should be removed from _active_calls."""
+        coordinator._active_calls["mod_x"] = {
+            "started": datetime.now(UTC),
+            "last_seen": datetime.now(UTC),
+            "watchdog": None,
+        }
+        coordinator._end_call_session("mod_x", reason="terminate")
+        assert "mod_x" not in coordinator._active_calls
+
+    async def test_end_call_session_cancels_watchdog(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """An active watchdog task should be cancelled."""
+        watchdog = AsyncMock(spec=asyncio.Task)
+        watchdog.done.return_value = False
+        coordinator._active_calls["mod_x"] = {
+            "started": datetime.now(UTC),
+            "last_seen": datetime.now(UTC),
+            "watchdog": watchdog,
+        }
+        coordinator._end_call_session("mod_x", reason="rescind")
+        watchdog.cancel.assert_called_once()
+
+    async def test_end_call_session_noop_for_unknown_module(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Ending a session for a module that has no session should not crash."""
+        coordinator._end_call_session("nonexistent", reason="terminate")
+        assert "nonexistent" not in coordinator._active_calls
+
+
+class TestCallSessionWatchdog:
+    """Test _call_session_watchdog timeout behavior."""
+
+    async def test_watchdog_closes_on_inactivity(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+    ) -> None:
+        """Watchdog should close the session when no retransmission arrives."""
+        now = datetime.now(UTC)
+        coordinator._active_calls[EXTERNAL_UNIT_ID] = {
+            "started": now - timedelta(seconds=5),
+            "last_seen": now - timedelta(seconds=CALL_RETRANSMIT_WINDOW + 1),
+            "watchdog": None,
+        }
+        with patch(
+            "custom_components.bticino_intercom.coordinator.asyncio.sleep",
+            side_effect=[None, asyncio.CancelledError],
+        ):
+            await coordinator._call_session_watchdog(EXTERNAL_UNIT_ID)
+
+        assert EXTERNAL_UNIT_ID not in coordinator._active_calls
+
+    async def test_watchdog_closes_on_hard_timeout(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+    ) -> None:
+        """Watchdog should close the session if it exceeds max duration."""
+        now = datetime.now(UTC)
+        coordinator._active_calls[EXTERNAL_UNIT_ID] = {
+            "started": now - timedelta(seconds=CALL_SESSION_MAX_DURATION + 1),
+            "last_seen": now,
+            "watchdog": None,
+        }
+        with patch(
+            "custom_components.bticino_intercom.coordinator.asyncio.sleep",
+            side_effect=[None, asyncio.CancelledError],
+        ):
+            await coordinator._call_session_watchdog(EXTERNAL_UNIT_ID)
+
+        assert EXTERNAL_UNIT_ID not in coordinator._active_calls
+
+    async def test_watchdog_exits_if_session_removed_externally(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+    ) -> None:
+        """Watchdog should exit cleanly if the session was already removed."""
+        with patch(
+            "custom_components.bticino_intercom.coordinator.asyncio.sleep",
+            side_effect=[None],
+        ):
+            await coordinator._call_session_watchdog(EXTERNAL_UNIT_ID)
+
+
+class TestCloseHistoryEvent:
+    """Test _close_history_event behavior."""
+
+    async def test_close_history_event_noop_without_history(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Should not crash when history store is None."""
+        coordinator.history = None
+        coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
+
+    async def test_close_history_event_noop_without_event_id(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Should not crash when event_id is None."""
+        coordinator.history = AsyncMock()
+        coordinator._close_history_event(None, EVENT_TYPE_TERMINATED)
+        coordinator.history.async_close_call.assert_not_called()
+
+    async def test_close_history_event_schedules_task(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+    ) -> None:
+        """Should schedule a background task when both history and event_id are present."""
+        mock_history = AsyncMock()
+        coordinator.history = mock_history
+        coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        mock_history.async_close_call.assert_awaited_once_with(event_id="sess-123", event_type=EVENT_TYPE_TERMINATED)
+
+
+class TestUpdateLastEvent:
+    """Test _update_last_event preserves existing subevents."""
+
+    async def test_preserves_existing_subevents(
+        self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict
+    ) -> None:
+        """Subevents from a prior incoming_call should survive _update_last_event."""
+        existing_subevents = [{"time": 123, "snapshot": {"url": "https://example.com"}}]
+        coordinator.data[DATA_LAST_EVENT] = {
+            "type": EVENT_TYPE_INCOMING_CALL,
+            "subevents": existing_subevents,
+        }
+        coordinator._update_last_event(
+            EVENT_TYPE_TERMINATED,
+            EXTERNAL_UNIT_ID,
+            "Citofono",
+            ws_rtc_offer,
+            ws_rtc_offer["extra_params"],
+        )
+        assert coordinator.data[DATA_LAST_EVENT]["subevents"] == existing_subevents
+        assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_TERMINATED
+
+
+# =============================================================================
+# bticino_intercom_call event emission
+# =============================================================================
+
+
+class TestCallEventEmission:
+    """Test bticino_intercom_call event emission."""
+
+    async def test_rtc_offer_fires_ring_event(self, hass, coordinator, ws_rtc_offer):
+        """RTC offer should fire a ring event with type=ring."""
+        events = async_capture_events(hass, "bticino_intercom_call")
+
+        coordinator._process_websocket_event(ws_rtc_offer)
+        await hass.async_block_till_done()
+
+        ring_events = [e for e in events if e.data.get("type") == "ring"]
+        assert len(ring_events) >= 1
+        data = ring_events[0].data
+        assert data["type"] == "ring"
+        assert data["session_id"] is not None
+        assert data["module_id"] is not None
+        assert data["entry_id"] == coordinator.entry.entry_id
+        assert "camera_entity_id" in data

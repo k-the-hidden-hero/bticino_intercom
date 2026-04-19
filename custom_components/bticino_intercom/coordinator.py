@@ -9,6 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pybticino import AsyncAccount, SignalingClient, WebsocketClient
@@ -20,6 +21,7 @@ from .const import (
     DATA_LAST_EVENT,
     DEFAULT_NAME,
     DOMAIN,
+    EVENT_CALL,
     EVENT_LOGBOOK_ACCEPTED_CALL,
     EVENT_LOGBOOK_ANSWERED_ELSEWHERE,
     EVENT_LOGBOOK_INCOMING_CALL,
@@ -243,6 +245,45 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during data fetch")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
+    def _fire_call_event(
+        self,
+        event_type: str,
+        module_id: str | None = None,
+        *,
+        reason: str | None = None,
+        snapshot_url: str | None = None,
+        vignette_url: str | None = None,
+    ) -> None:
+        """Fire a bticino_intercom_call event for frontend/automations."""
+        session_id = self._active_call.get("session_id") if self._active_call else None
+        module_name = None
+        camera_entity_id = None
+
+        if module_id:
+            modules = self.data.get("modules", {}) if self.data else {}
+            module_name = modules.get(module_id, {}).get("name", module_id)
+            ent_reg = er.async_get(self.hass)
+            for entry in er.async_entries_for_config_entry(ent_reg, self.entry.entry_id):
+                if entry.domain == "camera" and entry.unique_id and module_id in entry.unique_id:
+                    camera_entity_id = entry.entity_id
+                    break
+
+        data: dict[str, Any] = {
+            "type": event_type,
+            "entry_id": self.entry.entry_id,
+            "module_id": module_id,
+            "module_name": module_name,
+            "session_id": session_id,
+        }
+        if event_type == "ring":
+            data["snapshot_url"] = snapshot_url
+            data["vignette_url"] = vignette_url
+            data["camera_entity_id"] = camera_entity_id
+        if reason:
+            data["reason"] = reason
+
+        self.hass.bus.async_fire(EVENT_CALL, data)
+
     def _process_websocket_event(self, message: dict[str, Any]) -> bool:
         """Process event data from websocket and update self.data.
 
@@ -353,6 +394,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             if calling_module_id:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
 
+            self._fire_call_event("ring", calling_module_id)
+
             self.hass.bus.async_fire(
                 EVENT_LOGBOOK_INCOMING_CALL,
                 {"name": f"Incoming Call ({display_name})", "module_id": display_id},
@@ -363,8 +406,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if rtc_action == "rescind":
             _LOGGER.info("Call answered elsewhere (RTC rescind) for %s", display_name)
 
-            closing_session_id = session_id or self._active_calls.get(calling_module_id or display_id, {}).get(
-                "session_id"
+            closing_session_id = (
+                session_id
+                or session_desc.get("session_id")
+                or self._active_calls.get(calling_module_id or display_id, {}).get("session_id")
             )
             dedup_id = calling_module_id or display_id
             self._end_call_session(dedup_id, reason="rescind")
@@ -383,8 +428,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if rtc_action == "terminate":
             _LOGGER.info("Call terminated (RTC terminate) for %s", display_name)
 
-            closing_session_id = session_id or self._active_calls.get(calling_module_id or display_id, {}).get(
-                "session_id"
+            closing_session_id = (
+                session_id
+                or session_desc.get("session_id")
+                or self._active_calls.get(calling_module_id or display_id, {}).get("session_id")
             )
             dedup_id = calling_module_id or display_id
             self._end_call_session(dedup_id, reason="terminate")
@@ -430,6 +477,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             last_event = self.data.get(DATA_LAST_EVENT, {})
             if last_event and last_event.get("type") == EVENT_TYPE_INCOMING_CALL:
                 last_event["subevents"] = [subevent]
+                last_event["snapshot_url"] = snapshot_url
+                last_event["vignette_url"] = vignette_url
                 _LOGGER.info("Enriched existing call event with snapshot/vignette from incoming_call push")
             else:
                 self.data[DATA_LAST_EVENT] = {
