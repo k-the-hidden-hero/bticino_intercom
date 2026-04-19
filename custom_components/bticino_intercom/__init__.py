@@ -217,6 +217,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "reject_call", _async_reject_call)
 
+    # Register static files for blueprint sound
+    from pathlib import Path
+
+    www_path = Path(__file__).parent / "www"
+    if www_path.is_dir():
+        hass.http.register_static_path(f"/{DOMAIN}", str(www_path), cache_headers=True)
+
     # --- Define WebSocket Connection Manager Task and Start Logic ---
     async def _websocket_connection_manager() -> None:
         """Manage the WebSocket connection and reconnection."""
