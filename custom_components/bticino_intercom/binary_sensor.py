@@ -24,7 +24,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ async def async_setup_entry(
     if not entities:
         _LOGGER.debug("No BTicino binary sensor modules found")
 
+    cleanup_orphaned_entities(hass, entry.entry_id, "binary_sensor", entities)
     async_add_entities(entities)
 
 
@@ -227,6 +228,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
         self._turn_off_canceller = None
         self._attr_is_on = False
         self.async_write_ha_state()
+        self.coordinator.fire_call_timeout(self._module_id)
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""

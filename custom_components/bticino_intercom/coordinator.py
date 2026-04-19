@@ -415,6 +415,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             self._end_call_session(dedup_id, reason="rescind")
             if calling_module_id:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
+            self._fire_call_event("end", calling_module_id, reason="rescind")
             self._active_call = None
 
             self.hass.bus.async_fire(
@@ -437,6 +438,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             self._end_call_session(dedup_id, reason="terminate")
             if calling_module_id:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
+            self._fire_call_event("end", calling_module_id, reason="terminate")
             self._active_call = None
 
             self.hass.bus.async_fire(
@@ -610,6 +612,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
         _LOGGER.debug("Call session for module %s closed (reason=%s)", module_id, reason)
+
+    def fire_call_timeout(self, module_id: str) -> None:
+        """Fire an end event when the call times out."""
+        self._fire_call_event("end", module_id, reason="timeout")
+        self._active_call = None
 
     async def _call_session_watchdog(self, module_id: str) -> None:
         """Fallback watchdog: closes the session if rescind/terminate

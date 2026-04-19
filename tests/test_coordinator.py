@@ -604,3 +604,44 @@ class TestCallEventEmission:
         assert data["module_id"] is not None
         assert data["entry_id"] == coordinator.entry.entry_id
         assert "camera_entity_id" in data
+
+    async def test_rtc_rescind_fires_end_event(self, hass, coordinator, ws_rtc_offer, ws_rtc_rescind):
+        """RTC rescind should fire an end event with reason=rescind."""
+        coordinator._process_websocket_event(ws_rtc_offer)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, "bticino_intercom_call")
+        coordinator._process_websocket_event(ws_rtc_rescind)
+        await hass.async_block_till_done()
+
+        end_events = [e for e in events if e.data.get("type") == "end"]
+        assert len(end_events) == 1
+        assert end_events[0].data["reason"] == "rescind"
+
+    async def test_rtc_terminate_fires_end_event(self, hass, coordinator, ws_rtc_offer, ws_rtc_terminate):
+        """RTC terminate should fire an end event with reason=terminate."""
+        coordinator._process_websocket_event(ws_rtc_offer)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, "bticino_intercom_call")
+        coordinator._process_websocket_event(ws_rtc_terminate)
+        await hass.async_block_till_done()
+
+        end_events = [e for e in events if e.data.get("type") == "end"]
+        assert len(end_events) == 1
+        assert end_events[0].data["reason"] == "terminate"
+
+    async def test_timeout_fires_end_event(self, hass, coordinator, ws_rtc_offer):
+        """Binary sensor timeout should fire an end event with reason=timeout."""
+        coordinator._process_websocket_event(ws_rtc_offer)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, "bticino_intercom_call")
+        coordinator.fire_call_timeout(EXTERNAL_UNIT_ID)
+        await hass.async_block_till_done()
+
+        end_events = [e for e in events if e.data.get("type") == "end"]
+        assert len(end_events) == 1
+        assert end_events[0].data["reason"] == "timeout"
+        # active_call should be cleared after timeout
+        assert coordinator.active_call is None
