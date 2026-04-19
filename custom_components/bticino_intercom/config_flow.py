@@ -16,7 +16,16 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pybticino import AsyncAccount, AuthHandler
 from pybticino.exceptions import ApiError, AuthError
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    HISTORY_DEFAULT_MAX_EVENTS,
+    HISTORY_DEFAULT_RETENTION_DAYS,
+    HISTORY_MAX_MAX_EVENTS,
+    HISTORY_MAX_RETENTION_DAYS,
+    OPT_HISTORY_ENABLED,
+    OPT_HISTORY_MAX_EVENTS,
+    OPT_HISTORY_RETENTION_DAYS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +40,31 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 STEP_INIT_OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional("light_as_lock", default=False): selector.BooleanSelector(),
+        vol.Optional(OPT_HISTORY_ENABLED, default=True): selector.BooleanSelector(),
+        vol.Optional(
+            OPT_HISTORY_RETENTION_DAYS,
+            default=HISTORY_DEFAULT_RETENTION_DAYS,
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=HISTORY_MAX_RETENTION_DAYS,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="days",
+            ),
+        ),
+        vol.Optional(
+            OPT_HISTORY_MAX_EVENTS,
+            default=HISTORY_DEFAULT_MAX_EVENTS,
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=HISTORY_MAX_MAX_EVENTS,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="events",
+            ),
+        ),
     }
 )
 
@@ -56,12 +90,41 @@ class BticinoOptionsFlowHandler(config_entries.OptionsFlow):
             updated_options = {**self.config_entry.options, **user_input}
             return self.async_create_entry(title="", data=updated_options)
 
+        current = self.config_entry.options
         schema = vol.Schema(
             {
                 vol.Optional(
                     "light_as_lock",
-                    default=self.config_entry.options.get("light_as_lock", False),
+                    default=current.get("light_as_lock", False),
                 ): selector.BooleanSelector(),
+                vol.Optional(
+                    OPT_HISTORY_ENABLED,
+                    default=current.get(OPT_HISTORY_ENABLED, True),
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    OPT_HISTORY_RETENTION_DAYS,
+                    default=current.get(OPT_HISTORY_RETENTION_DAYS, HISTORY_DEFAULT_RETENTION_DAYS),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1,
+                        max=HISTORY_MAX_RETENTION_DAYS,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                        unit_of_measurement="days",
+                    ),
+                ),
+                vol.Optional(
+                    OPT_HISTORY_MAX_EVENTS,
+                    default=current.get(OPT_HISTORY_MAX_EVENTS, HISTORY_DEFAULT_MAX_EVENTS),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1,
+                        max=HISTORY_MAX_MAX_EVENTS,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                        unit_of_measurement="events",
+                    ),
+                ),
             }
         )
 

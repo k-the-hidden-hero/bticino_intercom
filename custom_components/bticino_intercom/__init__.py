@@ -35,6 +35,8 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import BticinoIntercomCoordinator
+from .history import EventHistoryStore, get_history_options
+from .media_source import BticinoHistoryImageView
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +48,8 @@ WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 COORDINATOR_KEY = "coordinator"
 START_LISTENER_REMOVE_KEY = "start_listener_remove"
+HISTORY_KEY = "history"
+HISTORY_VIEW_FLAG = f"{DOMAIN}_history_view_registered"
 TOKEN_STORAGE_VERSION = 1
 
 
@@ -108,12 +112,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Let's keep it explicit here for clarity, assuming coordinator might not always get it in init
     coordinator.websocket_client = websocket_client
 
+    # Prepare event history store (images + metadata on disk).
+    history_enabled, retention_days, max_events = get_history_options(entry.options)
+    history_store: EventHistoryStore | None = None
+    if history_enabled:
+        history_store = EventHistoryStore(hass, entry.entry_id)
+        await history_store.async_load()
+        await history_store.async_apply_retention(
+            retention_days=retention_days,
+            max_events=max_events,
+        )
+        coordinator.history = history_store
+
     # Store coordinator and websocket client in hass.data
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data[entry.entry_id] = {
         COORDINATOR_KEY: coordinator,
         WEBSOCKET_CLIENT_KEY: websocket_client,
+        HISTORY_KEY: history_store,
         # WEBSOCKET_TASK_KEY will be added later
     }
+
+    # Register the HTTP view once per HA instance.
+    if not hass.data.get(HISTORY_VIEW_FLAG):
+        hass.http.register_view(BticinoHistoryImageView())
+        hass.data[HISTORY_VIEW_FLAG] = True
 
     # Fetch initial data using the coordinator's standard method
     try:
@@ -359,7 +382,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Clean up hass.data[DOMAIN][entry.entry_id] only if unload succeeded
     if unload_ok and DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        removed = hass.data[DOMAIN].pop(entry.entry_id)
+        history_store: EventHistoryStore | None = removed.get(HISTORY_KEY)
+        if history_store is not None:
+            await history_store.async_unload()
         _LOGGER.debug("Removed entry data for %s from hass.data", entry.entry_id)
         # If this was the last entry, remove the domain key
         if not hass.data[DOMAIN]:
@@ -377,7 +403,10 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Clean up stored tokens when an entry is permanently removed."""
+    """Clean up stored tokens and history when an entry is permanently removed."""
     token_store = Store(hass, TOKEN_STORAGE_VERSION, f"{DOMAIN}.tokens.{entry.entry_id}")
     await token_store.async_remove()
-    _LOGGER.debug("Removed stored tokens for entry %s", entry.entry_id)
+    history_store = EventHistoryStore(hass, entry.entry_id)
+    await history_store.async_load()
+    await history_store.async_clear()
+    _LOGGER.debug("Removed stored tokens and history for entry %s", entry.entry_id)
