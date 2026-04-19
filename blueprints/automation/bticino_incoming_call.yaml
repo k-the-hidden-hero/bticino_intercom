@@ -1,0 +1,108 @@
+blueprint:
+  name: BTicino Intercom - Incoming Call Notification
+  description: >
+    Sends an actionable notification when the doorbell rings.
+    Android devices ring like a phone call (alarm stream).
+    Tapping Answer opens the dashboard and starts the video call.
+  domain: automation
+  input:
+    notify_service:
+      name: Notification Service
+      description: The mobile app notification service (e.g., notify.mobile_app_pixel)
+      selector:
+        text:
+    dashboard_path:
+      name: Dashboard Path
+      description: The Lovelace dashboard path where the intercom card is located
+      default: lovelace/0
+      selector:
+        text:
+
+trigger:
+  - platform: event
+    event_type: bticino_intercom_call
+    event_data:
+      type: ring
+
+condition: []
+
+action:
+  - variables:
+      session_id: "{{ trigger.event.data.session_id }}"
+      module_name: "{{ trigger.event.data.module_name | default('Intercom') }}"
+      camera_entity: "{{ trigger.event.data.camera_entity_id | default('') }}"
+      vignette: "{{ trigger.event.data.vignette_url | default('') }}"
+      dashboard: !input dashboard_path
+      tag: "bticino_call_{{ session_id }}"
+
+  - service: !input notify_service
+    data:
+      title: "Citofono"
+      message: "{{ module_name }} sta squillando"
+      data:
+        tag: "{{ tag }}"
+        timeout: 30
+        channel: alarm_stream
+        push:
+          interruption-level: time-sensitive
+          sound:
+            name: "/bticino_intercom/doorbell.wav"
+        image: "{{ vignette }}"
+        actions:
+          - action: "ANSWER_{{ session_id }}"
+            title: "Answer"
+          - action: "REJECT_{{ session_id }}"
+            title: "Reject"
+
+  - wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "ANSWER_{{ session_id }}"
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "REJECT_{{ session_id }}"
+      - platform: event
+        event_type: bticino_intercom_call
+        event_data:
+          type: end
+          session_id: "{{ session_id }}"
+    timeout: "00:00:35"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ wait.trigger and 'ANSWER' in (wait.trigger.event.data.action | default('')) }}
+        sequence:
+          - service: !input notify_service
+            data:
+              message: clear_notification
+              data:
+                tag: "{{ tag }}"
+          - event: mobile_app.navigate
+            event_data:
+              path: "/{{ dashboard }}?answer={{ camera_entity }}"
+
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ wait.trigger and 'REJECT' in (wait.trigger.event.data.action | default('')) }}
+        sequence:
+          - service: bticino_intercom.reject_call
+          - service: !input notify_service
+            data:
+              message: clear_notification
+              data:
+                tag: "{{ tag }}"
+
+    default:
+      - service: !input notify_service
+        data:
+          message: clear_notification
+          data:
+            tag: "{{ tag }}"
+
+mode: parallel
+max: 5
