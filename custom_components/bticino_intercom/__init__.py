@@ -220,9 +220,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register static files for blueprint sound
     from pathlib import Path
 
+    from homeassistant.components.http import StaticPathConfig
+
     www_path = Path(__file__).parent / "www"
     if www_path.is_dir():
-        hass.http.register_static_path(f"/{DOMAIN}", str(www_path), cache_headers=True)
+        await hass.http.async_register_static_paths([StaticPathConfig(f"/{DOMAIN}", str(www_path), True)])
 
     # --- Define WebSocket Connection Manager Task and Start Logic ---
     async def _websocket_connection_manager() -> None:
