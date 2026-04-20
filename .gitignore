@@ -13,3 +13,4 @@ bticino_intercom.egg-info/
 .credentials
 .local/
 ha-dev-config/
+.superpowers/
