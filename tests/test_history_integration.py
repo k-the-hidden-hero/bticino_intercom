@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bticino_intercom.const import DOMAIN
 
-from .conftest import EXT_UNIT_MODULE_ID
+from .conftest import EXT_UNIT_MODULE_ID, HOME_ID
 
 
 class _FakeResponse:
@@ -113,12 +113,9 @@ async def test_terminate_event_closes_history_record(
             {
                 "extra_params": {
                     "device_id": EXT_UNIT_MODULE_ID,
+                    "session_id": "sess-close",
                     "data": {
-                        "session_description": {
-                            "type": "terminate",
-                            "module_id": EXT_UNIT_MODULE_ID,
-                            "session_id": "sess-close",
-                        }
+                        "type": "terminate",
                     },
                 }
             }
@@ -137,19 +134,32 @@ async def test_history_disabled_skips_recording(
     mock_auth_handler: AsyncMock,
     mock_account: AsyncMock,
     mock_websocket_client,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
 ) -> None:
     """With history disabled via options, no store is created and pushes are ignored."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="No history",
-        data={"username": "u@x", "password": "p", "home_id": "home_test_123"},
+        data={"username": "u@x", "password": "p", "home_id": HOME_ID},
         options={"light_as_lock": False, "history_enabled": False},
         unique_id="u@x",
         version=1,
     )
     entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
+        mock_store_cls.return_value.async_remove = AsyncMock()
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
 
     assert hass.data[DOMAIN][entry.entry_id]["history"] is None
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]

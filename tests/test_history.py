@@ -279,3 +279,35 @@ async def test_clear_wipes_events_and_files(
 
     assert store.list_events() == []
     assert not path.exists()
+
+
+async def test_list_modules_returns_distinct_ids(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """``list_modules`` should return distinct module IDs in insertion order."""
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_mods")
+        await store.async_load()
+        for eid, mid in [("e1", "mod_a"), ("e2", "mod_b"), ("e3", "mod_a"), ("e4", "mod_c")]:
+            await store.async_record_call(
+                event_id=eid,
+                module_id=mid,
+                module_name=None,
+                snapshot_url=None,
+                vignette_url=None,
+            )
+
+    assert sorted(store.list_modules()) == ["mod_a", "mod_b", "mod_c"]
+
+
+async def test_list_modules_empty_store(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """``list_modules`` on an empty store should return an empty list."""
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_empty")
+        await store.async_load()
+
+    assert store.list_modules() == []

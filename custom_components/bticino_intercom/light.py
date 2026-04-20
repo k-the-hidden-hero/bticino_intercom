@@ -14,7 +14,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ async def async_setup_entry(
     if not entities:
         _LOGGER.debug("No BTicino light modules found or configured to be represented as light")
 
+    cleanup_orphaned_entities(hass, entry.entry_id, "light", entities)
     async_add_entities(entities)
 
 

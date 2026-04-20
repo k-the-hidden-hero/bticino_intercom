@@ -1,4 +1,4 @@
-"""Tests for the BTicino media source provider."""
+"""Tests for the BTicino media source provider and HTTP image view."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ import pytest
 from homeassistant.components.media_source.error import Unresolvable
 from homeassistant.components.media_source.models import MediaSourceItem
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from custom_components.bticino_intercom.const import DOMAIN
 from custom_components.bticino_intercom.history import EventHistoryStore
 from custom_components.bticino_intercom.media_source import (
+    BticinoHistoryImageView,
     BticinoMediaSource,
     async_get_media_source,
 )
@@ -109,3 +111,68 @@ async def test_resolve_unknown_identifier_raises(hass: HomeAssistant, seeded_sto
         await ms.async_resolve_media(
             MediaSourceItem(hass, DOMAIN, "entry_main/mod_a/ghost/snapshot", None),
         )
+
+
+# =============================================================================
+# BticinoHistoryImageView (HTTP handler)
+# =============================================================================
+
+
+async def test_image_view_serves_file(
+    hass: HomeAssistant,
+    seeded_store,
+    hass_client,
+) -> None:
+    """GET on a valid image path should return the file bytes."""
+    await async_setup_component(hass, "http", {})
+    hass.http.register_view(BticinoHistoryImageView())
+    client = await hass_client()
+
+    url = BticinoHistoryImageView.build_url("entry_main", "evt1", "snapshot")
+    resp = await client.get(url)
+    assert resp.status == 200
+    body = await resp.read()
+    assert body == b"snap"
+
+
+async def test_image_view_returns_404_for_missing_event(
+    hass: HomeAssistant,
+    seeded_store,
+    hass_client,
+) -> None:
+    """GET for a non-existent event should return 404."""
+    await async_setup_component(hass, "http", {})
+    hass.http.register_view(BticinoHistoryImageView())
+    client = await hass_client()
+
+    url = BticinoHistoryImageView.build_url("entry_main", "ghost", "snapshot")
+    resp = await client.get(url)
+    assert resp.status == 404
+
+
+async def test_image_view_returns_400_for_invalid_kind(
+    hass: HomeAssistant,
+    seeded_store,
+    hass_client,
+) -> None:
+    """GET with an invalid image kind should return 400."""
+    await async_setup_component(hass, "http", {})
+    hass.http.register_view(BticinoHistoryImageView())
+    client = await hass_client()
+
+    resp = await client.get("/api/bticino_intercom/image/entry_main/evt1/badkind")
+    assert resp.status == 400
+
+
+async def test_image_view_returns_404_for_missing_entry(
+    hass: HomeAssistant,
+    hass_client,
+) -> None:
+    """GET for an entry with no history store should return 404."""
+    await async_setup_component(hass, "http", {})
+    hass.http.register_view(BticinoHistoryImageView())
+    client = await hass_client()
+
+    url = BticinoHistoryImageView.build_url("nonexistent_entry", "evt1", "snapshot")
+    resp = await client.get(url)
+    assert resp.status == 404

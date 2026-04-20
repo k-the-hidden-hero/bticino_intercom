@@ -26,7 +26,7 @@ from webrtc_models import RTCConfiguration, RTCIceCandidateInit, RTCIceServer
 
 from .const import DOMAIN, IMAGE_CACHE_SECONDS
 from .coordinator import BticinoIntercomCoordinator
-from .utils import format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,7 +52,6 @@ async def async_setup_entry(
 
     entities: list[Camera] = [
         BticinoSnapshotCamera(coordinator),
-        BticinoVignetteCamera(coordinator),
     ]
 
     # Create one WebRTC camera per external unit (BNEU module)
@@ -69,6 +68,7 @@ async def async_setup_entry(
                 )
             )
 
+    cleanup_orphaned_entities(hass, entry.entry_id, "camera", entities)
     async_add_entities(entities)
 
 
@@ -253,16 +253,6 @@ class BticinoSnapshotCamera(BticinoBaseEventCamera):
         super().__init__(coordinator, image_type="snapshot")
 
 
-class BticinoVignetteCamera(BticinoBaseEventCamera):
-    """Representation of the Last Event Vignette Camera."""
-
-    _attr_name = "Last Event Vignette"
-
-    def __init__(self, coordinator: BticinoIntercomCoordinator) -> None:
-        """Initialize the vignette camera."""
-        super().__init__(coordinator, image_type="vignette")
-
-
 class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera):
     """BTicino WebRTC camera for live video from the intercom.
 
@@ -312,6 +302,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         # Per-camera signaling session ID (the shared SignalingClient tracks
         # only the LAST session across all cameras)
         self._signaling_session_id: str | None = None
+        self._poster_event_id: str | None = None
+        self._poster_bytes: bytes | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -334,20 +326,33 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         return self.coordinator.last_update_success and self.coordinator.main_device_id is not None
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
-        """Return a snapshot image if available (from last event)."""
-        last_event = self.coordinator.data.get("last_event", {})
-        snapshot_url = last_event.get("snapshot_url")
-        if not snapshot_url:
-            return None
+        """Return the most recent snapshot for this module from local history."""
+        from .history import EventHistoryStore
 
-        session = async_get_clientsession(self.hass)
-        try:
-            async with session.get(snapshot_url) as resp:
-                resp.raise_for_status()
-                return await resp.read()
-        except aiohttp.ClientError:
-            _LOGGER.debug("Failed to fetch snapshot for WebRTC camera")
-            return None
+        store: EventHistoryStore | None = (
+            self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry.entry_id, {}).get("history")
+        )
+
+        if store is not None:
+            events = store.list_events(module_id=self._module_id, limit=1)
+            if not events:
+                events = store.list_events(limit=1)
+            if events:
+                event = events[0]
+                eid = event.get("event_id")
+                if eid == self._poster_event_id and self._poster_bytes:
+                    return self._poster_bytes
+                path = store.resolve_image_path(eid, "snapshot")
+                if path is not None:
+                    try:
+                        data = await self.hass.async_add_executor_job(path.read_bytes)
+                        self._poster_event_id = eid
+                        self._poster_bytes = data
+                        return data
+                    except OSError:
+                        _LOGGER.debug("Failed to read poster from %s", path)
+
+        return None
 
     # --- SDP manipulation methods ---
     #

@@ -51,12 +51,11 @@ async def test_webrtc_camera_snapshot_entities(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
 ) -> None:
-    """Test that snapshot and vignette cameras are also created."""
+    """Test that snapshot camera is created alongside WebRTC cameras."""
     states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    assert len(states) == 4  # snapshot + vignette + 2 webrtc
+    assert len(states) == 3  # snapshot + 2 webrtc
     names = {hass.states.get(s).attributes.get("friendly_name", "") for s in states}
     assert any("Snapshot" in n for n in names)
-    assert any("Vignette" in n for n in names)
 
 
 async def test_answer_mode_when_active_call(

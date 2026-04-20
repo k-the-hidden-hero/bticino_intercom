@@ -62,6 +62,34 @@ The integration supports WebRTC live video streaming via the Netatmo cloud.
 
 For protocol details, see the [pybticino WebRTC documentation](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-signaling.md).
 
+## Call History
+
+The integration persists incoming call events (snapshots/vignettes) to disk so they remain viewable after the Azure SAS URLs expire (typically within minutes).
+
+- **Storage**: `<config>/bticino_intercom/events/<entry_id>/<module_id>/` for images, `helpers.storage.Store` for metadata
+- **Trigger**: `incoming_call` WebSocket push → `coordinator._process_status_event()` → `EventHistoryStore.async_record_call()` downloads images immediately
+- **Closing**: RTC `terminate`/`rescind` → `coordinator._close_history_event()` marks the record as closed
+- **Retention**: configurable via options flow (`history_enabled`, `history_retention_days`, `history_max_events`), defaults 30 days / 500 events
+- **Browsing**: exposed via HA Media Source (`media-source://bticino_intercom/...`) and authenticated HTTP view (`/api/bticino_intercom/image/...`)
+- **Files**: `history.py` (store), `media_source.py` (browse + HTTP view)
+
+## Debug Service
+
+When the integration logger is at DEBUG level, a `bticino_intercom.inject_test_event` service is registered. It injects a fake `incoming_call` push into the coordinator, triggering the full event pipeline (snapshot download, history recording, entity updates, logbook events).
+
+Protected by HA authentication. Optional service_data parameters:
+- `device_id`: module to attribute the event to (defaults to first available module)
+- `session_id`: custom session ID (defaults to `test-<timestamp>`)
+- `snapshot_url`: image URL to download as snapshot (defaults to picsum.photos)
+- `vignette_url`: image URL to download as vignette (defaults to picsum.photos)
+
+Activate with:
+```yaml
+logger:
+  logs:
+    custom_components.bticino_intercom: debug
+```
+
 ## Version & Dependencies
 
 Version is tracked in `manifest.json` (`version` field). The sole runtime dependency is `pybticino>=1.0`.

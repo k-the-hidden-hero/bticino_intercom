@@ -56,6 +56,16 @@ HISTORY_VIEW_FLAG = f"{DOMAIN}_history_view_registered"
 TOKEN_STORAGE_VERSION = 1
 
 
+async def _deferred_start_websocket(hass, entry, start_fn):
+    """Wait for the config entry to finish loading, then start the WebSocket manager."""
+    for _ in range(30):
+        if entry.state == config_entries.ConfigEntryState.LOADED:
+            await start_fn()
+            return
+        await asyncio.sleep(1)
+    _LOGGER.error("Entry never reached LOADED state, WebSocket manager not started")
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up BTicino from a config entry."""
     username = entry.data[CONF_USERNAME]
@@ -235,7 +245,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         attempt = 0  # Retry counter, resets on successful connection
         # Outer try block to catch unexpected errors in the loop structure itself
         try:
-            while hass.is_running and entry.state == config_entries.ConfigEntryState.LOADED:
+            while hass.is_running:
                 _LOGGER.debug(
                     "WebSocket manager loop iteration start. hass.is_running=%s, entry.state=%s",
                     hass.is_running,
@@ -388,14 +398,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Store task in the existing entry_data dictionary
         entry_data[WEBSOCKET_TASK_KEY] = connection_task
 
-    # Schedule the WebSocket start after HA starts
+    # Schedule the WebSocket start — always deferred to avoid running during setup
     if hass.state == CoreState.running:
-        # HA is already running, start WS manager task immediately
-        _LOGGER.debug("Home Assistant already running, starting WebSocket manager directly.")
-        await _async_start_websocket_manager()
-        start_listener_remove = None  # No listener needed
+        _LOGGER.debug("Home Assistant already running, scheduling WebSocket manager via call_later.")
+        entry.async_on_unload(
+            hass.async_create_task(
+                _deferred_start_websocket(hass, entry, _async_start_websocket_manager),
+                f"{DOMAIN} deferred WS start - {entry.entry_id}",
+            ).cancel
+        )
+        start_listener_remove = None
     else:
-        # HA is starting, listen for the start event
         _LOGGER.debug("Home Assistant starting, scheduling WebSocket manager via listener.")
         start_listener_remove = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _async_start_websocket_manager)
 

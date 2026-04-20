@@ -1,0 +1,106 @@
+blueprint:
+  name: BTicino Doorbell Notification with Snapshot
+  description: >-
+    Sends a mobile notification with a snapshot image when someone rings the
+    doorbell. Includes action buttons to open the door or dismiss.
+  domain: automation
+  source_url: https://github.com/k-the-hidden-hero/bticino_intercom/blob/main/blueprints/automation/doorbell_notification.yaml
+  input:
+    call_sensor:
+      name: Doorbell Call Sensor
+      description: The binary sensor that turns on when the doorbell rings.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              integration: bticino_intercom
+    door_lock:
+      name: Door Lock
+      description: The lock entity to open when the user taps "Open Door".
+      selector:
+        entity:
+          filter:
+            - domain: lock
+              integration: bticino_intercom
+    snapshot_camera:
+      name: Snapshot Camera
+      description: The camera entity that provides the doorbell snapshot.
+      selector:
+        entity:
+          filter:
+            - domain: camera
+              integration: bticino_intercom
+    notify_device:
+      name: Mobile Device
+      description: The mobile device to send the notification to.
+      selector:
+        device:
+          filter:
+            - integration: mobile_app
+    notification_title:
+      name: Notification Title
+      description: Title of the notification.
+      default: "Doorbell"
+    notification_message:
+      name: Notification Message
+      description: Message body of the notification.
+      default: "Someone is at the door"
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input call_sensor
+    to: "on"
+
+action:
+  - alias: "Send notification with snapshot and action buttons"
+    domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: !input notification_title
+    message: !input notification_message
+    data:
+      image: /api/camera_proxy/{{ states.camera | selectattr('entity_id', 'eq', camera_entity) | map(attribute='entity_id') | first }}
+      actions:
+        - action: OPEN_DOOR
+          title: "Open Door"
+        - action: DISMISS
+          title: "Dismiss"
+      tag: bticino_doorbell
+      ttl: 0
+      priority: high
+
+  - alias: "Wait for user action or timeout"
+    wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: OPEN_DOOR
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: DISMISS
+      - platform: state
+        entity_id: !input call_sensor
+        to: "off"
+    timeout:
+      seconds: 30
+    continue_on_timeout: true
+
+  - alias: "Open the door if requested"
+    if:
+      - condition: template
+        value_template: >-
+          {{ wait.trigger is not none and
+             wait.trigger.platform == 'event' and
+             wait.trigger.event.data.action == 'OPEN_DOOR' }}
+    then:
+      - alias: "Unlock the door"
+        service: lock.unlock
+        target:
+          entity_id: !input door_lock
+
+variables:
+  camera_entity: !input snapshot_camera

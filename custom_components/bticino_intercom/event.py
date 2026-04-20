@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, SIGNAL_CALL_RECEIVED, SUBTYPE_EXTERNAL_UNIT
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
+from .utils import cleanup_orphaned_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ async def async_setup_entry(
             if subtype == SUBTYPE_EXTERNAL_UNIT:
                 entities.append(BticinoDoorbellEvent(coordinator, module_id))
 
+    cleanup_orphaned_entities(hass, entry.entry_id, "event", entities)
     async_add_entities(entities)
 
 

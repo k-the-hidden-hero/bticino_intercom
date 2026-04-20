@@ -28,6 +28,7 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 - **Doorbell event entity** — Modern `EventDeviceClass.DOORBELL` entity for doorbell ring detection, alongside the existing binary sensor for backwards compatibility.
 - **Real-time snapshots** — Snapshot and vignette images from incoming call push events, available instantly when someone rings.
 - **Multi-camera support** — One camera entity per external unit (BNEU module). Homes with multiple entrance cameras can view each independently.
+- **Call history** — Incoming call snapshots and vignettes are saved locally as soon as the doorbell rings. Images remain viewable indefinitely, even after the cloud URLs expire. Browsable from the HA Media Browser. Configurable retention (default: 30 days, 500 events).
 - **Per-module call tracking** — Call sessions tracked per module with retransmission deduplication, ensuring reliable event processing.
 - **Two-way audio** — Hear the visitor and talk back via WebRTC. Requires the [bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras) custom card (HA's built-in camera player mutes audio by design).
 
@@ -211,6 +212,23 @@ logger:
     pybticino: debug
 ```
 
+### Debug service: inject test events
+
+When debug logging is active, the integration registers a `bticino_intercom.inject_test_event` service. This injects a fake incoming call into the system, triggering the full event pipeline — useful for testing automations, notifications, and call history without ringing the physical doorbell.
+
+Call it from **Developer Tools > Services**:
+
+```yaml
+service: bticino_intercom.inject_test_event
+data:
+  device_id: "00:03:50:xx:xx:xx"   # optional, defaults to first module
+  snapshot_url: "https://picsum.photos/640/480"  # optional
+  vignette_url: "https://picsum.photos/160/120"  # optional
+```
+
+> [!NOTE]
+> This service is only available when `custom_components.bticino_intercom` is set to `debug` in the logger configuration. It is protected by Home Assistant authentication.
+
 ### Common issues
 
 | Problem | Cause | Solution |
@@ -238,7 +256,7 @@ Found a bug or want a feature? [Open an issue](https://github.com/k-the-hidden-h
 
 Pull requests are welcome. The project uses:
 - **ruff** for linting and formatting
-- **pytest** with `pytest-homeassistant-custom-component` for testing (107 tests)
+- **pytest** with `pytest-homeassistant-custom-component` for testing (159 tests)
 - **bandit** for security scanning
 - CI runs on every push and PR
 

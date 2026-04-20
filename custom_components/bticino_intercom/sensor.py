@@ -24,7 +24,7 @@ from .const import (
     EVENT_TYPE_TERMINATED,
 )
 from .coordinator import BticinoIntercomCoordinator
-from .utils import format_timestamp_iso, format_uptime_readable
+from .utils import cleanup_orphaned_entities, format_timestamp_iso, format_uptime_readable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ async def async_setup_entry(
         _LOGGER.warning("No BTicino sensors could be set up.")
         return
 
+    cleanup_orphaned_entities(hass, entry.entry_id, "sensor", entities)
     async_add_entities(entities)
 
 

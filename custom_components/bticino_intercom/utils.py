@@ -1,9 +1,17 @@
 """Utility functions for the BTicino integration."""
 
+from __future__ import annotations
+
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util.dt import utc_from_timestamp
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity import Entity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,3 +56,22 @@ def format_uptime_readable(uptime_seconds: int | None) -> str | None:
     except OverflowError:
         _LOGGER.warning("Uptime value %s is too large to format.", uptime_seconds)
         return "Overflow"
+
+
+def cleanup_orphaned_entities(
+    hass: HomeAssistant,
+    entry_id: str,
+    domain: str,
+    current_entities: list[Entity],
+) -> None:
+    """Remove registered entities that are no longer created by the platform.
+
+    Call this after building the entity list but before async_add_entities,
+    so that stale entities from previous versions are automatically cleaned up.
+    """
+    current_unique_ids = {e.unique_id for e in current_entities}
+    ent_reg = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(ent_reg, entry_id):
+        if reg_entry.domain == domain and reg_entry.unique_id not in current_unique_ids:
+            _LOGGER.info("Removing orphaned %s entity %s (%s)", domain, reg_entry.entity_id, reg_entry.unique_id)
+            ent_reg.async_remove(reg_entry.entity_id)
