@@ -64,6 +64,7 @@ async def test_light_turn_on(
         module_id=LIGHT_MODULE_ID,
         bridge_id=BRIDGE_MAC,
         state={"on": True},
+        timezone=hass.config.time_zone,
     )
     # Note: state may revert to off after coordinator refresh returns fixture data
 
@@ -104,6 +105,7 @@ async def test_light_turn_off(
         module_id=LIGHT_MODULE_ID,
         bridge_id=BRIDGE_MAC,
         state={"on": False},
+        timezone=hass.config.time_zone,
     )
 
 

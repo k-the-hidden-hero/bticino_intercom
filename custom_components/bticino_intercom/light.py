@@ -135,6 +135,7 @@ class BticinoLight(BticinoEntity, LightEntity):
                 module_id=self._module_id,
                 bridge_id=self._bridge_id,
                 state={"on": True},
+                timezone=self.hass.config.time_zone,
             )
             await self.coordinator.async_request_refresh()
         except Exception as err:
@@ -157,6 +158,7 @@ class BticinoLight(BticinoEntity, LightEntity):
                 module_id=self._module_id,
                 bridge_id=self._bridge_id,
                 state={"on": False},
+                timezone=self.hass.config.time_zone,
             )
             await self.coordinator.async_request_refresh()
         except Exception as err:
