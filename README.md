@@ -59,10 +59,13 @@ Ready-to-use blueprints for common intercom automations. Click a button to impor
 
 | Blueprint | Description | Import |
 |---|---|---|
+| **Actionable Doorbell Notification** | Snapshot preview + up to 3 unlock buttons. Rings even on silent (alarm stream). | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdoorbell_actionable_notification.yaml) |
 | **Doorbell Notification** | Mobile notification with snapshot and "Open Door" / "Dismiss" buttons | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdoorbell_notification.yaml) |
 | **Auto-Open on Schedule** | Automatically open the door during a time window (e.g., for deliveries) | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdoorbell_auto_open.yaml) |
 | **Snapshot to Service** | Save snapshot to file and fire an event for face recognition or logging | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdoorbell_snapshot_to_service.yaml) |
 | **Missed Call Log** | Get notified when a doorbell call goes unanswered | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fk-the-hidden-hero%2Fbticino_intercom%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fmissed_call_log.yaml) |
+
+All blueprints are in the [`blueprints/automation/`](blueprints/automation/) folder. You can also install them manually by copying the YAML file to your `config/blueprints/automation/bticino_intercom/` directory.
 
 ### Companion: bticino_ha_extras
 

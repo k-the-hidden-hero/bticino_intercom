@@ -1,0 +1,133 @@
+blueprint:
+  name: BTicino Doorbell — Actionable Notification
+  description: >
+    Sends an actionable mobile notification with a snapshot preview when the
+    doorbell rings. Select any number of locks to show as action buttons —
+    their names are used as button labels automatically. Uses the Android
+    alarm audio stream so the notification sounds even when the phone is
+    on silent/mute. Android allows a maximum of 3 action buttons.
+  domain: automation
+  source_url: https://github.com/k-the-hidden-hero/bticino_intercom/blob/main/blueprints/automation/doorbell_actionable_notification.yaml
+  input:
+    call_sensor:
+      name: Doorbell Sensor
+      description: Binary sensor that turns on when someone rings.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              integration: bticino_intercom
+
+    snapshot_camera:
+      name: Snapshot Camera
+      description: Camera entity for the snapshot preview in the notification.
+      selector:
+        entity:
+          filter:
+            - domain: camera
+              integration: bticino_intercom
+
+    notify_device:
+      name: Mobile Device
+      description: The device to receive the notification.
+      selector:
+        device:
+          filter:
+            - integration: mobile_app
+
+    notification_title:
+      name: Notification Title
+      default: "Doorbell"
+      selector:
+        text:
+
+    notification_message:
+      name: Notification Message
+      default: "Someone is at the door"
+      selector:
+        text:
+
+    door_locks:
+      name: Door Locks
+      description: >
+        Select the locks to show as action buttons. Each lock's friendly name
+        becomes the button label. Android supports a maximum of 3 buttons.
+      selector:
+        target:
+          entity:
+            domain: lock
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input call_sensor
+    to: "on"
+
+variables:
+  camera_entity: !input snapshot_camera
+  lock_target: !input door_locks
+  lock_entities: "{{ lock_target.entity_id | default([]) }}"
+  actions_list: >-
+    {% set ns = namespace(items=[]) %}
+    {% for eid in lock_entities[:3] %}
+      {% set name = state_attr(eid, 'friendly_name') or eid %}
+      {% set ns.items = ns.items + [{"action": "BTICINO_UNLOCK_" ~ loop.index, "title": name}] %}
+    {% endfor %}
+    {{ ns.items }}
+
+action:
+  - alias: "Send notification with snapshot and action buttons"
+    domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: !input notification_title
+    message: !input notification_message
+    data:
+      image: /api/camera_proxy/{{ camera_entity }}
+      tag: bticino_doorbell
+      ttl: 0
+      priority: high
+      importance: high
+      channel: alarm_stream
+      visibility: public
+      push:
+        interruption-level: time-sensitive
+      actions: "{{ actions_list }}"
+
+  - alias: "Wait for user action or timeout"
+    wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: BTICINO_UNLOCK_1
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: BTICINO_UNLOCK_2
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: BTICINO_UNLOCK_3
+      - platform: state
+        entity_id: !input call_sensor
+        to: "off"
+    timeout:
+      seconds: 30
+    continue_on_timeout: true
+
+  - alias: "Unlock the requested door"
+    if:
+      - condition: template
+        value_template: >-
+          {{ wait.trigger is not none and
+             wait.trigger.platform == 'event' and
+             wait.trigger.event.data.action is defined and
+             wait.trigger.event.data.action.startswith('BTICINO_UNLOCK_') }}
+    then:
+      - variables:
+          lock_index: "{{ (wait.trigger.event.data.action | replace('BTICINO_UNLOCK_', '') | int) - 1 }}"
+      - action: lock.unlock
+        target:
+          entity_id: "{{ lock_entities[lock_index] }}"
