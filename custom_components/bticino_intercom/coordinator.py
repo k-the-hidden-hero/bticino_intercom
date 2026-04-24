@@ -284,7 +284,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         self.hass.bus.async_fire(EVENT_CALL, data)
 
-    def _process_websocket_event(self, message: dict[str, Any]) -> bool:
+    async def _process_websocket_event(self, message: dict[str, Any]) -> bool:
         """Process event data from websocket and update self.data.
 
         Handles two event formats:
@@ -301,18 +301,18 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         rtc_action = rtc_data.get("type")  # "offer", "rescind", "terminate"
 
         if rtc_action in ("offer", "rescind", "terminate"):
-            return self._process_rtc_event(message, extra_params, rtc_data, rtc_action)
+            return await self._process_rtc_event(message, extra_params, rtc_data, rtc_action)
 
         # --- Format B: Status events (BNC1-incoming_call, etc.) ---
         event_type = extra_params.get("event_type")
         if event_type in ("incoming_call", "missed_call", "accepted_call"):
-            return self._process_status_event(message, extra_params, event_type)
+            return await self._process_status_event(message, extra_params, event_type)
 
         # --- Unknown event ---
         _LOGGER.debug("Unhandled websocket event (push_type=%s): %s", push_type, message)
         return False
 
-    def _process_rtc_event(
+    async def _process_rtc_event(
         self,
         message: dict[str, Any],
         extra_params: dict[str, Any],
@@ -423,7 +423,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 {"name": f"Call Answered Elsewhere ({display_name})", "module_id": display_id},
             )
             self._update_last_event(EVENT_TYPE_ANSWERED_ELSEWHERE, display_id, display_name, message, extra_params)
-            self._close_history_event(closing_session_id, EVENT_TYPE_ANSWERED_ELSEWHERE)
+            await self._close_history_event(closing_session_id, EVENT_TYPE_ANSWERED_ELSEWHERE)
             return True
 
         if rtc_action == "terminate":
@@ -446,12 +446,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 {"name": f"Call Terminated ({display_name})", "module_id": display_id},
             )
             self._update_last_event(EVENT_TYPE_TERMINATED, display_id, display_name, message, extra_params)
-            self._close_history_event(closing_session_id, EVENT_TYPE_TERMINATED)
+            await self._close_history_event(closing_session_id, EVENT_TYPE_TERMINATED)
             return True
 
         return False
 
-    def _process_status_event(
+    async def _process_status_event(
         self,
         message: dict[str, Any],
         extra_params: dict[str, Any],
@@ -464,21 +464,26 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if event_type == "incoming_call":
             _LOGGER.info("Incoming call status event (with snapshot) for %s", device_name)
 
-            # Store snapshot/vignette URLs in last_event for camera entities
             snapshot_url = extra_params.get("snapshot_url")
             vignette_url = extra_params.get("vignette_url")
             timestamp = extra_params.get("timestamp")
-
             now_ts = int(datetime.now(UTC).timestamp())
-            subevent: dict[str, Any] = {"time": now_ts}
-            if snapshot_url:
-                subevent["snapshot"] = {"url": snapshot_url}
-            if vignette_url:
-                subevent["vignette"] = {"url": vignette_url}
+            event_id = extra_params.get("session_id") or f"{now_ts}-{device_id}"
+
+            # Download images to local storage BEFORE firing events,
+            # so automations/notifications have images available immediately.
+            if self.history is not None and device_id:
+                await self.history.async_record_call(
+                    event_id=event_id,
+                    module_id=device_id,
+                    module_name=device_name,
+                    snapshot_url=snapshot_url,
+                    vignette_url=vignette_url,
+                    event_timestamp=now_ts,
+                )
 
             last_event = self.data.get(DATA_LAST_EVENT, {})
             if last_event and last_event.get("type") == EVENT_TYPE_INCOMING_CALL:
-                last_event["subevents"] = [subevent]
                 last_event["snapshot_url"] = snapshot_url
                 last_event["vignette_url"] = vignette_url
                 _LOGGER.info("Enriched existing call event with snapshot/vignette from incoming_call push")
@@ -490,10 +495,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     "module_id": device_id,
                     "module_name": device_name,
                     "session_id": extra_params.get("session_id"),
-                    "event_id": extra_params.get("event_id"),
+                    "event_id": event_id,
                     "snapshot_url": snapshot_url,
                     "vignette_url": vignette_url,
-                    "subevents": [subevent],
                 }
 
             calling_module_id = self._active_call.get("module_id") if self._active_call else None
@@ -509,20 +513,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 EVENT_LOGBOOK_INCOMING_CALL,
                 {"name": f"Incoming Call ({device_name})", "module_id": device_id},
             )
-
-            if self.history is not None and device_id:
-                event_id = extra_params.get("session_id") or f"{now_ts}-{device_id}"
-                self.hass.async_create_background_task(
-                    self.history.async_record_call(
-                        event_id=event_id,
-                        module_id=device_id,
-                        module_name=device_name,
-                        snapshot_url=snapshot_url,
-                        vignette_url=vignette_url,
-                        event_timestamp=now_ts,
-                    ),
-                    name=f"{DOMAIN} history record {event_id}",
-                )
 
             return True
 
@@ -587,11 +577,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         """Update the last event data from an RTC event."""
         session_data = extra_params.get("data", {}).get("session_description", {})
 
+        # Only use subevents from this event — never reuse stale subevents
+        # from a previous poll, as their Azure SAS URLs will have expired.
         subevents_data = session_data.get("subevents")
-        if not subevents_data:
-            existing = self.data.get(DATA_LAST_EVENT, {}).get("subevents")
-            if existing:
-                subevents_data = existing
 
         self.data[DATA_LAST_EVENT] = {
             "type": event_type,
@@ -603,14 +591,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             "subevents": subevents_data,
         }
 
-    def _close_history_event(self, event_id: str | None, event_type: str) -> None:
-        """Schedule history record closure for the given session id."""
+    async def _close_history_event(self, event_id: str | None, event_type: str) -> None:
+        """Close the history record for the given session id."""
         if self.history is None or not event_id:
             return
-        self.hass.async_create_background_task(
-            self.history.async_close_call(event_id=event_id, event_type=event_type),
-            name=f"{DOMAIN} history close {event_id}",
-        )
+        await self.history.async_close_call(event_id=event_id, event_type=event_type)
 
     def _end_call_session(self, module_id: str, reason: str) -> None:
         """Close an active call session and cancel its watchdog."""
@@ -671,8 +656,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._last_ws_message_time = datetime.now(UTC)
         self._ws_stale = False
         _LOGGER.debug("Coordinator: _handle_websocket_message called with: %s", message)
-        # Directly call _process_websocket_event with the received message
-        data_updated = self._process_websocket_event(message)
+        data_updated = await self._process_websocket_event(message)
 
         # No longer need the complex logic checking event_list or push_type here,
         # as _process_websocket_event now handles the specific RTC call structure.

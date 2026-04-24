@@ -5,7 +5,6 @@ import logging
 from datetime import datetime
 from typing import Any
 
-import aiohttp
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.camera.webrtc import (
     WebRTCAnswer,
@@ -16,7 +15,6 @@ from homeassistant.components.camera.webrtc import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -119,8 +117,8 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
 
     @property
     def available(self) -> bool:
-        """Return True if the coordinator succeeded and we have an image URL."""
-        return self.coordinator.last_update_success and self._image_url is not None
+        """Return True if the coordinator succeeded and we have an image source."""
+        return self.coordinator.last_update_success and (self._image_url is not None or self._cached_image is not None)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -204,10 +202,13 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
         self._update_state_internal()
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
-        """Return bytes of camera image."""
+        """Return bytes of camera image from local history store.
+
+        Images are downloaded to disk when the incoming_call push arrives,
+        so we always read locally — never from Azure SAS URLs (which expire).
+        """
         now = utcnow()
 
-        # Return cached image if valid and not expired
         if (
             self._cached_image is not None
             and self._cached_image_time is not None
@@ -215,31 +216,35 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
         ):
             return self._cached_image
 
-        # Check if the image URL is present and not expired
-        if not self._image_url:
-            return None
-        if self._image_expires_at and now >= self._image_expires_at:
-            _LOGGER.debug("%s: Image URL has expired", self.entity_id)
+        return await self._read_from_history()
+
+    async def _read_from_history(self) -> bytes | None:
+        """Read the latest image from the local history store."""
+        from .history import EventHistoryStore
+
+        store: EventHistoryStore | None = (
+            self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry.entry_id, {}).get("history")
+        )
+        if store is None:
             return None
 
-        session = async_get_clientsession(self.hass)
-        try:
-            async with session.get(self._image_url) as response:
-                response.raise_for_status()
-                image_bytes = await response.read()
-                self._cached_image = image_bytes
-                self._cached_image_time = now
-                _LOGGER.debug(
-                    "%s: Fetched and cached image (%d bytes)",
-                    self.entity_id,
-                    len(image_bytes),
-                )
-                return image_bytes
-        except aiohttp.ClientError as err:
-            _LOGGER.error("%s: Error fetching camera image: %s", self.entity_id, err)
+        events = store.list_events(limit=1)
+        if not events:
             return None
-        except Exception as err:
-            _LOGGER.error("%s: Unexpected error fetching image: %s", self.entity_id, err)
+
+        eid = events[0].get("event_id")
+        path = store.resolve_image_path(eid, self._image_type)
+        if path is None:
+            return None
+
+        try:
+            data = await self.hass.async_add_executor_job(path.read_bytes)
+            self._cached_image = data
+            self._cached_image_time = utcnow()
+            _LOGGER.debug("%s: Loaded image from local history (%d bytes)", self.entity_id, len(data))
+            return data
+        except OSError:
+            _LOGGER.debug("%s: Failed to read from history path %s", self.entity_id, path)
             return None
 
 

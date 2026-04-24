@@ -361,10 +361,12 @@ async def _setup_integration(
         patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
         patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
         patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+        patch("custom_components.bticino_intercom.history.Store") as mock_history_store_cls,
     ):
-        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
-        mock_store_cls.return_value.async_save = AsyncMock()
-        mock_store_cls.return_value.async_remove = AsyncMock()
+        for cls in (mock_store_cls, mock_history_store_cls):
+            cls.return_value.async_load = AsyncMock(return_value=None)
+            cls.return_value.async_save = AsyncMock()
+            cls.return_value.async_remove = AsyncMock()
         await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
 

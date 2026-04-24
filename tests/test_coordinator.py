@@ -34,7 +34,7 @@ class TestRtcOffer:
 
     async def test_offer_sets_active_call(self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict) -> None:
         """An RTC offer should store the active call state."""
-        result = coordinator._process_websocket_event(ws_rtc_offer)
+        result = await coordinator._process_websocket_event(ws_rtc_offer)
 
         assert result is True
         assert coordinator.active_call is not None
@@ -53,7 +53,7 @@ class TestRtcOffer:
         mock_signaling = MagicMock()
         coordinator._signaling_client = mock_signaling
 
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
 
         mock_signaling.set_session_from_push.assert_called_once_with(
             session_id=SESSION_ID,
@@ -67,13 +67,13 @@ class TestRtcOffer:
     ) -> None:
         """An RTC offer should work fine when signaling client is None."""
         coordinator._signaling_client = None
-        result = coordinator._process_websocket_event(ws_rtc_offer)
+        result = await coordinator._process_websocket_event(ws_rtc_offer)
         assert result is True
         assert coordinator.active_call is not None
 
     async def test_offer_updates_last_event(self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict) -> None:
         """An RTC offer should update last_event as incoming_call."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
 
         last = coordinator.data[DATA_LAST_EVENT]
         assert last["type"] == EVENT_TYPE_INCOMING_CALL
@@ -92,7 +92,7 @@ class TestRtcOffer:
             "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
             side_effect=capture_signal,
         ):
-            coordinator._process_websocket_event(ws_rtc_offer)
+            await coordinator._process_websocket_event(ws_rtc_offer)
 
         assert len(signals) == 1
         assert signals[0] == (coordinator.hass, SIGNAL_CALL_RECEIVED, True, EXTERNAL_UNIT_ID)
@@ -109,7 +109,7 @@ class TestRtcOffer:
         events = []
         hass.bus.async_listen(EVENT_LOGBOOK_INCOMING_CALL, lambda e: events.append(e))
 
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         await hass.async_block_till_done()
 
         assert len(events) == 1
@@ -126,10 +126,10 @@ class TestRtcTerminate:
         ws_rtc_terminate: dict,
     ) -> None:
         """A terminate after an offer should clear the active call."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         assert coordinator.active_call is not None
 
-        result = coordinator._process_websocket_event(ws_rtc_terminate)
+        result = await coordinator._process_websocket_event(ws_rtc_terminate)
 
         assert result is True
         assert coordinator.active_call is None
@@ -142,7 +142,7 @@ class TestRtcTerminate:
     ) -> None:
         """Terminate should dispatch SIGNAL_CALL_RECEIVED(False) using module_id from active call."""
         # First process the offer to populate active_call
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
 
         signals = []
 
@@ -153,7 +153,7 @@ class TestRtcTerminate:
             "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
             side_effect=capture_signal,
         ):
-            coordinator._process_websocket_event(ws_rtc_terminate)
+            await coordinator._process_websocket_event(ws_rtc_terminate)
 
         # Should dispatch with the external unit module_id (from active_call),
         # NOT the bridge MAC (which is the device_id in the terminate event)
@@ -167,8 +167,8 @@ class TestRtcTerminate:
         ws_rtc_terminate: dict,
     ) -> None:
         """Terminate should update last_event as terminated."""
-        coordinator._process_websocket_event(ws_rtc_offer)
-        coordinator._process_websocket_event(ws_rtc_terminate)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_terminate)
 
         last = coordinator.data[DATA_LAST_EVENT]
         assert last["type"] == EVENT_TYPE_TERMINATED
@@ -179,7 +179,7 @@ class TestRtcTerminate:
         ws_rtc_terminate: dict,
     ) -> None:
         """Terminate without a prior offer should still succeed (using device_id)."""
-        result = coordinator._process_websocket_event(ws_rtc_terminate)
+        result = await coordinator._process_websocket_event(ws_rtc_terminate)
 
         assert result is True
         assert coordinator.active_call is None
@@ -199,8 +199,8 @@ class TestRtcRescind:
         ws_rtc_rescind: dict,
     ) -> None:
         """Rescind should clear the active call."""
-        coordinator._process_websocket_event(ws_rtc_offer)
-        result = coordinator._process_websocket_event(ws_rtc_rescind)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        result = await coordinator._process_websocket_event(ws_rtc_rescind)
 
         assert result is True
         assert coordinator.active_call is None
@@ -212,7 +212,7 @@ class TestRtcRescind:
         ws_rtc_rescind: dict,
     ) -> None:
         """Rescind should dispatch using module_id from active_call."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
 
         signals = []
 
@@ -223,7 +223,7 @@ class TestRtcRescind:
             "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
             side_effect=capture_signal,
         ):
-            coordinator._process_websocket_event(ws_rtc_rescind)
+            await coordinator._process_websocket_event(ws_rtc_rescind)
 
         assert len(signals) == 1
         assert signals[0] == (coordinator.hass, SIGNAL_CALL_RECEIVED, False, EXTERNAL_UNIT_ID)
@@ -235,8 +235,8 @@ class TestRtcRescind:
         ws_rtc_rescind: dict,
     ) -> None:
         """Rescind should set last_event type to answered_elsewhere."""
-        coordinator._process_websocket_event(ws_rtc_offer)
-        coordinator._process_websocket_event(ws_rtc_rescind)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_rescind)
 
         last = coordinator.data[DATA_LAST_EVENT]
         assert last["type"] == EVENT_TYPE_ANSWERED_ELSEWHERE
@@ -254,7 +254,7 @@ class TestStatusIncomingCall:
         self, coordinator: BticinoIntercomCoordinator, ws_incoming_call: dict
     ) -> None:
         """incoming_call should store snapshot and vignette URLs."""
-        result = coordinator._process_websocket_event(ws_incoming_call)
+        result = await coordinator._process_websocket_event(ws_incoming_call)
 
         assert result is True
         last = coordinator.data[DATA_LAST_EVENT]
@@ -270,8 +270,8 @@ class TestStatusIncomingCall:
         ws_incoming_call: dict,
     ) -> None:
         """incoming_call should not clear the active_call set by offer."""
-        coordinator._process_websocket_event(ws_rtc_offer)
-        coordinator._process_websocket_event(ws_incoming_call)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_incoming_call)
 
         # active_call should still be set from the offer
         assert coordinator.active_call is not None
@@ -287,8 +287,8 @@ class TestStatusMissedCall:
         ws_missed_call: dict,
     ) -> None:
         """missed_call should clear the active call."""
-        coordinator._process_websocket_event(ws_rtc_offer)
-        result = coordinator._process_websocket_event(ws_missed_call)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        result = await coordinator._process_websocket_event(ws_missed_call)
 
         assert result is True
         assert coordinator.active_call is None
@@ -300,7 +300,7 @@ class TestStatusMissedCall:
         ws_missed_call: dict,
     ) -> None:
         """missed_call should turn off binary sensor using module_id from active_call."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
 
         signals = []
 
@@ -311,7 +311,7 @@ class TestStatusMissedCall:
             "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
             side_effect=capture_signal,
         ):
-            coordinator._process_websocket_event(ws_missed_call)
+            await coordinator._process_websocket_event(ws_missed_call)
 
         # Should use the external unit module_id from active_call
         assert len(signals) == 1
@@ -323,7 +323,7 @@ class TestStatusMissedCall:
         ws_missed_call: dict,
     ) -> None:
         """missed_call should set last_event type to missed_call."""
-        coordinator._process_websocket_event(ws_missed_call)
+        await coordinator._process_websocket_event(ws_missed_call)
 
         last = coordinator.data[DATA_LAST_EVENT]
         assert last["type"] == EVENT_TYPE_MISSED_CALL
@@ -344,7 +344,7 @@ class TestStatusMissedCall:
             "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
             side_effect=capture_signal,
         ):
-            coordinator._process_websocket_event(ws_missed_call)
+            await coordinator._process_websocket_event(ws_missed_call)
 
         assert len(signals) == 0
 
@@ -359,8 +359,8 @@ class TestStatusAcceptedCall:
         ws_accepted_call: dict,
     ) -> None:
         """accepted_call should NOT clear active_call (call may be active on another device)."""
-        coordinator._process_websocket_event(ws_rtc_offer)
-        coordinator._process_websocket_event(ws_accepted_call)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_accepted_call)
 
         assert coordinator.active_call is not None
 
@@ -370,7 +370,7 @@ class TestStatusAcceptedCall:
         ws_accepted_call: dict,
     ) -> None:
         """accepted_call should update last_event."""
-        coordinator._process_websocket_event(ws_accepted_call)
+        await coordinator._process_websocket_event(ws_accepted_call)
 
         last = coordinator.data[DATA_LAST_EVENT]
         assert last["type"] == EVENT_TYPE_ACCEPTED_CALL
@@ -394,22 +394,22 @@ class TestCallSequence:
     ) -> None:
         """Simulate: offer -> incoming_call -> terminate -> missed_call."""
         # 1. Offer arrives
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         assert coordinator.active_call is not None
         assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_INCOMING_CALL
 
         # 2. incoming_call with snapshot (overwrites last_event but keeps active_call)
-        coordinator._process_websocket_event(ws_incoming_call)
+        await coordinator._process_websocket_event(ws_incoming_call)
         assert coordinator.active_call is not None
         assert coordinator.data[DATA_LAST_EVENT]["snapshot_url"] == "https://example.com/snapshot.jpg"
 
         # 3. Terminate
-        coordinator._process_websocket_event(ws_rtc_terminate)
+        await coordinator._process_websocket_event(ws_rtc_terminate)
         assert coordinator.active_call is None
         assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_TERMINATED
 
         # 4. Missed call
-        coordinator._process_websocket_event(ws_missed_call)
+        await coordinator._process_websocket_event(ws_missed_call)
         assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_MISSED_CALL
 
     async def test_offer_then_rescind_then_accepted(
@@ -420,14 +420,14 @@ class TestCallSequence:
         ws_accepted_call: dict,
     ) -> None:
         """Simulate: offer -> rescind -> accepted_call (answered on another device)."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         assert coordinator.active_call is not None
 
-        coordinator._process_websocket_event(ws_rtc_rescind)
+        await coordinator._process_websocket_event(ws_rtc_rescind)
         assert coordinator.active_call is None
         assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_ANSWERED_ELSEWHERE
 
-        coordinator._process_websocket_event(ws_accepted_call)
+        await coordinator._process_websocket_event(ws_accepted_call)
         assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_ACCEPTED_CALL
 
     async def test_unknown_event_returns_false(self, coordinator: BticinoIntercomCoordinator) -> None:
@@ -436,7 +436,7 @@ class TestCallSequence:
             "push_type": "BNC1-something_else",
             "extra_params": {"data": {"type": "unknown"}},
         }
-        result = coordinator._process_websocket_event(unknown)
+        result = await coordinator._process_websocket_event(unknown)
         assert result is False
 
 
@@ -537,38 +537,36 @@ class TestCloseHistoryEvent:
     async def test_close_history_event_noop_without_history(self, coordinator: BticinoIntercomCoordinator) -> None:
         """Should not crash when history store is None."""
         coordinator.history = None
-        coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
+        await coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
 
     async def test_close_history_event_noop_without_event_id(self, coordinator: BticinoIntercomCoordinator) -> None:
         """Should not crash when event_id is None."""
         coordinator.history = AsyncMock()
-        coordinator._close_history_event(None, EVENT_TYPE_TERMINATED)
+        await coordinator._close_history_event(None, EVENT_TYPE_TERMINATED)
         coordinator.history.async_close_call.assert_not_called()
 
-    async def test_close_history_event_schedules_task(
+    async def test_close_history_event_awaits_close(
         self,
-        hass: HomeAssistant,
         coordinator: BticinoIntercomCoordinator,
     ) -> None:
-        """Should schedule a background task when both history and event_id are present."""
+        """Should directly await async_close_call when both history and event_id are present."""
         mock_history = AsyncMock()
         coordinator.history = mock_history
-        coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
-        await hass.async_block_till_done(wait_background_tasks=True)
+        await coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
         mock_history.async_close_call.assert_awaited_once_with(event_id="sess-123", event_type=EVENT_TYPE_TERMINATED)
 
 
 class TestUpdateLastEvent:
-    """Test _update_last_event preserves existing subevents."""
+    """Test _update_last_event does not reuse stale subevents."""
 
-    async def test_preserves_existing_subevents(
+    async def test_does_not_reuse_stale_subevents(
         self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict
     ) -> None:
-        """Subevents from a prior incoming_call should survive _update_last_event."""
-        existing_subevents = [{"time": 123, "snapshot": {"url": "https://example.com"}}]
+        """RTC events without subevents must not inherit expired URLs from prior events."""
+        stale_subevents = [{"time": 123, "snapshot": {"url": "https://expired.example.com"}}]
         coordinator.data[DATA_LAST_EVENT] = {
             "type": EVENT_TYPE_INCOMING_CALL,
-            "subevents": existing_subevents,
+            "subevents": stale_subevents,
         }
         coordinator._update_last_event(
             EVENT_TYPE_TERMINATED,
@@ -577,7 +575,7 @@ class TestUpdateLastEvent:
             ws_rtc_offer,
             ws_rtc_offer["extra_params"],
         )
-        assert coordinator.data[DATA_LAST_EVENT]["subevents"] == existing_subevents
+        assert coordinator.data[DATA_LAST_EVENT]["subevents"] is None
         assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_TERMINATED
 
 
@@ -593,7 +591,7 @@ class TestCallEventEmission:
         """RTC offer should fire a ring event with type=ring."""
         events = async_capture_events(hass, "bticino_intercom_call")
 
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         await hass.async_block_till_done()
 
         ring_events = [e for e in events if e.data.get("type") == "ring"]
@@ -607,11 +605,11 @@ class TestCallEventEmission:
 
     async def test_rtc_rescind_fires_end_event(self, hass, coordinator, ws_rtc_offer, ws_rtc_rescind):
         """RTC rescind should fire an end event with reason=rescind."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         await hass.async_block_till_done()
 
         events = async_capture_events(hass, "bticino_intercom_call")
-        coordinator._process_websocket_event(ws_rtc_rescind)
+        await coordinator._process_websocket_event(ws_rtc_rescind)
         await hass.async_block_till_done()
 
         end_events = [e for e in events if e.data.get("type") == "end"]
@@ -620,11 +618,11 @@ class TestCallEventEmission:
 
     async def test_rtc_terminate_fires_end_event(self, hass, coordinator, ws_rtc_offer, ws_rtc_terminate):
         """RTC terminate should fire an end event with reason=terminate."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         await hass.async_block_till_done()
 
         events = async_capture_events(hass, "bticino_intercom_call")
-        coordinator._process_websocket_event(ws_rtc_terminate)
+        await coordinator._process_websocket_event(ws_rtc_terminate)
         await hass.async_block_till_done()
 
         end_events = [e for e in events if e.data.get("type") == "end"]
@@ -633,11 +631,11 @@ class TestCallEventEmission:
 
     async def test_status_incoming_call_fires_ring_with_images(self, hass, coordinator, ws_rtc_offer, ws_incoming_call):
         """Status incoming_call should fire a ring event with image URLs."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         await hass.async_block_till_done()
 
         events = async_capture_events(hass, "bticino_intercom_call")
-        coordinator._process_websocket_event(ws_incoming_call)
+        await coordinator._process_websocket_event(ws_incoming_call)
         await hass.async_block_till_done()
 
         ring_events = [e for e in events if e.data.get("type") == "ring"]
@@ -648,7 +646,7 @@ class TestCallEventEmission:
 
     async def test_timeout_fires_end_event(self, hass, coordinator, ws_rtc_offer):
         """Binary sensor timeout should fire an end event with reason=timeout."""
-        coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_offer)
         await hass.async_block_till_done()
 
         events = async_capture_events(hass, "bticino_intercom_call")

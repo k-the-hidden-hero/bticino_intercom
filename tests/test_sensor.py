@@ -81,7 +81,7 @@ async def test_event_sensor_updates_on_websocket(
             },
         },
     }
-    coordinator._process_websocket_event(message)
+    await coordinator._process_websocket_event(message)
     coordinator.async_set_updated_data(coordinator.data)
     await hass.async_block_till_done()
 
