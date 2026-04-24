@@ -192,6 +192,12 @@ class EventHistoryStore:
                 if stored:
                     record[f"{kind}_file"] = stored
 
+            # Generate a SEELE-style placeholder for voice-only calls
+            if not record.get("snapshot_file") and not snapshot_url:
+                stored = await self._generate_placeholder(module_id, event_id, module_name or module_id)
+                if stored:
+                    record["snapshot_file"] = stored
+
             await self._persist_locked()
             if created:
                 _LOGGER.info(
@@ -326,6 +332,45 @@ class EventHistoryStore:
             _LOGGER.warning("Error writing %s for event %s: %s", kind, event_id, err)
             return None
         _LOGGER.debug("Stored %s image for event %s (%d bytes)", kind, event_id, len(data))
+        return rel
+
+    async def _generate_placeholder(
+        self,
+        module_id: str,
+        event_id: str,
+        module_name: str,
+    ) -> str | None:
+        """Generate a SEELE-style 'SOUND ONLY' placeholder and write it to disk."""
+        safe_event = event_id.replace("/", "_").replace("\\", "_")
+        safe_module = module_id.replace("/", "_").replace("\\", "_").replace(":", "_")
+        rel = f"{safe_module}/{safe_event}_snapshot.jpg"
+        target = self._root / rel
+
+        def _generate_and_write() -> None:
+            import io
+
+            from PIL import Image, ImageDraw, ImageFont
+
+            width, height = 640, 480
+            img = Image.new("RGB", (width, height), color=(0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            font_name = ImageFont.load_default(size=42)
+            font_sound = ImageFont.load_default(size=28)
+            name_upper = module_name.upper()
+            draw.text((width / 2, height / 2 - 40), name_upper, fill=(255, 255, 255), font=font_name, anchor="mm")
+            draw.text((width / 2, height / 2 + 20), "SOUND ONLY", fill=(180, 0, 0), font=font_sound, anchor="mm")
+            draw.rectangle([15, 15, width - 15, height - 15], outline=(60, 60, 60), width=2)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(buf.getvalue())
+
+        try:
+            await self.hass.async_add_executor_job(_generate_and_write)
+        except OSError:
+            _LOGGER.warning("Failed to generate placeholder for event %s", event_id)
+            return None
+        _LOGGER.debug("Generated SOUND ONLY placeholder for event %s", event_id)
         return rel
 
     async def _delete_event_files(self, event: dict[str, Any]) -> None:

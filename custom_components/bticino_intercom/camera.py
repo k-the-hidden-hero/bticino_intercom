@@ -1,7 +1,6 @@
 """Platform for camera integration."""
 
 import asyncio
-import io
 import logging
 from datetime import datetime
 from typing import Any
@@ -96,7 +95,6 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
         self._cached_image: bytes | None = None
         self._cached_image_time: datetime | None = None
         self._last_event_module_name: str | None = None
-        self._placeholder_cache: dict[str, bytes] = {}
         self._update_state()  # Initial update
 
     @property
@@ -235,50 +233,24 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
         store: EventHistoryStore | None = (
             self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry.entry_id, {}).get("history")
         )
-        if store is not None:
-            events = store.list_events(limit=1)
-            if events:
-                path = store.resolve_image_path(events[0].get("event_id"), self._image_type)
-                if path is not None:
-                    try:
-                        data = await self.hass.async_add_executor_job(path.read_bytes)
-                        self._cached_image = data
-                        self._cached_image_time = utcnow()
-                        return data
-                    except OSError:
-                        pass
+        if store is None:
+            return None
 
-        # No image available — generate a voice-only placeholder if a call is active
-        module_name = self._last_event_module_name
-        if module_name:
-            return await self.hass.async_add_executor_job(self._generate_sound_only_image, module_name)
-        return None
+        events = store.list_events(limit=1)
+        if not events:
+            return None
 
-    def _generate_sound_only_image(self, module_name: str) -> bytes:
-        """Generate a SEELE-style 'SOUND ONLY' placeholder for voice-only intercoms."""
-        cache_key = module_name.upper()
-        if cache_key in self._placeholder_cache:
-            return self._placeholder_cache[cache_key]
+        path = store.resolve_image_path(events[0].get("event_id"), self._image_type)
+        if path is None:
+            return None
 
-        from PIL import Image, ImageDraw, ImageFont
-
-        width, height = 640, 480
-        img = Image.new("RGB", (width, height), color=(0, 0, 0))
-        draw = ImageDraw.Draw(img)
-
-        font_name = ImageFont.load_default(size=42)
-        font_sound = ImageFont.load_default(size=28)
-
-        draw.text((width / 2, height / 2 - 40), cache_key, fill=(255, 255, 255), font=font_name, anchor="mm")
-        draw.text((width / 2, height / 2 + 20), "SOUND ONLY", fill=(180, 0, 0), font=font_sound, anchor="mm")
-        draw.rectangle([15, 15, width - 15, height - 15], outline=(60, 60, 60), width=2)
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        data = buf.getvalue()
-
-        self._placeholder_cache[cache_key] = data
-        return data
+        try:
+            data = await self.hass.async_add_executor_job(path.read_bytes)
+            self._cached_image = data
+            self._cached_image_time = utcnow()
+            return data
+        except OSError:
+            return None
 
 
 class BticinoSnapshotCamera(BticinoBaseEventCamera):
