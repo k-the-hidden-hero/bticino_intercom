@@ -11,9 +11,9 @@ from custom_components.bticino_intercom.const import DOMAIN
 
 
 def _get_all_webrtc_cameras(hass, mock_setup_entry):
-    """Helper to retrieve all WebRTC camera entity objects."""
+    """Helper to retrieve all WebRTC camera entity objects (excluding Call Home)."""
     entity_comp = hass.data["entity_components"]["camera"]
-    return [e for e in entity_comp.entities if hasattr(e, "_module_id")]
+    return [e for e in entity_comp.entities if hasattr(e, "_module_id") and e._module_id is not None]
 
 
 def _get_webrtc_camera(hass, mock_setup_entry):
@@ -29,7 +29,7 @@ async def test_webrtc_cameras_created_per_external_unit(
     """One WebRTC camera per BNEU external unit."""
     states = hass.states.async_entity_ids(CAMERA_DOMAIN)
     # Find cameras that are NOT snapshot/vignette
-    non_event_cameras = [s for s in states if "snapshot" not in s and "vignette" not in s]
+    non_event_cameras = [s for s in states if "snapshot" not in s and "vignette" not in s and "call_home" not in s]
     assert len(non_event_cameras) == 2  # Two BNEU modules
 
 
@@ -53,7 +53,7 @@ async def test_webrtc_camera_snapshot_entities(
 ) -> None:
     """Test that snapshot camera is created alongside WebRTC cameras."""
     states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    assert len(states) == 3  # snapshot + 2 webrtc
+    assert len(states) == 4  # snapshot + 2 webrtc + call_home
     names = {hass.states.get(s).attributes.get("friendly_name", "") for s in states}
     assert any("Snapshot" in n for n in names)
 

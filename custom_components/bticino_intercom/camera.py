@@ -50,6 +50,7 @@ async def async_setup_entry(
 
     entities: list[Camera] = [
         BticinoSnapshotCamera(coordinator),
+        BticinoCallHomeCamera(coordinator, account, signaling_client),
     ]
 
     # Create one WebRTC camera per external unit (BNEU module)
@@ -756,3 +757,34 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             self._signaling._session_id = self._signaling_session_id
             self._signaling_session_id = None
             self.hass.async_create_task(self._signaling.send_terminate())
+
+
+class BticinoCallHomeCamera(BticinoWebRTCCamera):
+    """Voice-only camera for calling the indoor intercom unit.
+
+    Sends a WebRTC offer with module_id=None, which makes the bridge
+    ring the indoor unit speaker. No video — audio only.
+    """
+
+    _attr_name = "Call Home"
+    _attr_icon = "mdi:phone-classic"
+
+    def __init__(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        account: AsyncAccount,
+        signaling_client: SignalingClient,
+    ) -> None:
+        """Initialize the Call Home camera."""
+        super().__init__(
+            coordinator,
+            account,
+            signaling_client,
+            module_id=None,
+            module_name="Call Home",
+        )
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_call_home"
+
+    async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
+        """No poster image for voice-only calls."""
+        return None
