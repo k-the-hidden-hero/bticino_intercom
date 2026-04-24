@@ -390,6 +390,22 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 "watchdog": watchdog,
             }
 
+            # Record the call in history (without images for now).
+            # If an incoming_call push arrives later with snapshots,
+            # async_record_call will update the same record in-place.
+            if self.history is not None and (calling_module_id or device_id):
+                record_module = calling_module_id or device_id
+                now_ts = int(now.timestamp())
+                event_id = session_id or f"{now_ts}-{record_module}"
+                await self.history.async_record_call(
+                    event_id=event_id,
+                    module_id=record_module,
+                    module_name=display_name,
+                    snapshot_url=None,
+                    vignette_url=None,
+                    event_timestamp=now_ts,
+                )
+
             # Dispatch signal for binary sensor
             if calling_module_id:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
