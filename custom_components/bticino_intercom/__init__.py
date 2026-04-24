@@ -222,6 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await sig.send_terminate()
         except Exception:
             _LOGGER.exception("reject_call: failed to send terminate")
+            return
         coord._fire_call_event("end", module_id, reason="rejected")
         coord._active_call = None
 

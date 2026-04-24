@@ -62,7 +62,7 @@ action:
     title: !input notification_title
     message: !input notification_message
     data:
-      image: /api/camera_proxy/{{ states.camera | selectattr('entity_id', 'eq', camera_entity) | map(attribute='entity_id') | first }}
+      image: /api/camera_proxy/{{ camera_entity }}
       actions:
         - action: OPEN_DOOR
           title: "Open Door"

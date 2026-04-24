@@ -1,6 +1,7 @@
 """Platform for binary sensor integration."""
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from homeassistant.components.binary_sensor import (
@@ -92,6 +93,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
         """Initialize the call sensor."""
         super().__init__(coordinator, module_id)
+        self._turn_off_canceller: Callable[[], None] | None = None
         self._attr_unique_id = f"{coordinator.entry.entry_id}_call_{module_id}"
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
         entity_name = module_data.get("name")
@@ -206,7 +208,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
             self._attr_is_on = state
             self.async_write_ha_state()
 
-            if hasattr(self, "_turn_off_canceller") and self._turn_off_canceller:
+            if self._turn_off_canceller is not None:
                 _LOGGER.debug("Cancelling previous turn-off timer for %s", self.entity_id)
                 self._turn_off_canceller()
                 self._turn_off_canceller = None
@@ -237,7 +239,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
-        if hasattr(self, "_turn_off_canceller") and self._turn_off_canceller:
+        if self._turn_off_canceller is not None:
             _LOGGER.debug("Cancelling turn-off timer for %s during removal", self.entity_id)
             self._turn_off_canceller()
             self._turn_off_canceller = None

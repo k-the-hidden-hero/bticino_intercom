@@ -13,8 +13,8 @@ Where ``kind`` is ``snapshot`` or ``vignette``.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -27,6 +27,7 @@ from homeassistant.components.media_source.models import (
     PlayMedia,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util.dt import as_local, utc_from_timestamp
 
 from .const import DOMAIN
 from .history import IMAGE_KINDS, EventHistoryStore
@@ -45,7 +46,7 @@ def _fmt_timestamp(ts: int | None) -> str:
     if not ts:
         return "unknown time"
     try:
-        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        return as_local(utc_from_timestamp(ts)).strftime("%Y-%m-%d %H:%M:%S")
     except (OverflowError, OSError, ValueError):
         return "unknown time"
 
@@ -278,7 +279,7 @@ class BticinoHistoryImageView(HomeAssistantView):
     @staticmethod
     def build_url(entry_id: str, event_id: str, kind: str) -> str:
         """Return the HTTP URL for a given history image."""
-        return f"/api/bticino_intercom/image/{entry_id}/{event_id}/{kind}"
+        return f"/api/bticino_intercom/image/{entry_id}/{quote(event_id, safe='')}/{kind}"
 
     async def get(
         self,

@@ -374,10 +374,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             session = self._active_calls.get(dedup_id)
 
             if session is not None:
-                # Retransmission of an ongoing call: only refresh timestamp
-                session["last_seen"] = now
-                _LOGGER.debug("Ignoring retransmitted offer for module %s (session active)", dedup_id)
-                return False
+                if session.get("session_id") == session_id:
+                    session["last_seen"] = now
+                    _LOGGER.debug("Ignoring retransmitted offer for module %s (session active)", dedup_id)
+                    return False
+                # Different session from same module — close old, start new
+                _LOGGER.info("New call from module %s replacing existing session", dedup_id)
+                self._end_call_session(dedup_id, reason="new_call")
 
             # New call: open session with watchdog
             watchdog = self.hass.async_create_background_task(
@@ -388,6 +391,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 "started": now,
                 "last_seen": now,
                 "watchdog": watchdog,
+                "session_id": session_id,
             }
 
             # Record the call in history (without images for now).

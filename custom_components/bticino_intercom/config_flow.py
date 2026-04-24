@@ -278,6 +278,9 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             options_data = {
                 "light_as_lock": user_input.get("light_as_lock", False),
+                OPT_HISTORY_ENABLED: user_input.get(OPT_HISTORY_ENABLED, True),
+                OPT_HISTORY_RETENTION_DAYS: user_input.get(OPT_HISTORY_RETENTION_DAYS, HISTORY_DEFAULT_RETENTION_DAYS),
+                OPT_HISTORY_MAX_EVENTS: user_input.get(OPT_HISTORY_MAX_EVENTS, HISTORY_DEFAULT_MAX_EVENTS),
             }
             return self.async_create_entry(title=self._config_title, data=self._config_data, options=options_data)
 

@@ -23,9 +23,7 @@ rules:
   docs-removal-instructions:
     status: todo
     comment: Standard HA removal, not yet documented.
-  entity-event-setup:
-    status: exempt
-    comment: No event entities.
+  entity-event-setup: done
   entity-unique-id: done
   has-entity-name: done
   runtime-data:

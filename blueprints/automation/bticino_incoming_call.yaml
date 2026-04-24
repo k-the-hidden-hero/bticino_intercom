@@ -37,8 +37,8 @@ action:
 
   - service: !input notify_service
     data:
-      title: "Citofono"
-      message: "{{ module_name }} sta squillando"
+      title: "Intercom"
+      message: "{{ module_name }} is ringing"
       data:
         tag: "{{ tag }}"
         timeout: 30
