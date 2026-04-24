@@ -529,6 +529,47 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         return "\r\n".join(result)
 
     @staticmethod
+    def _reorder_mlines(answer_sdp: str, offer_sdp: str) -> str:
+        """Reorder m-lines in the answer to match the offer's order.
+
+        RFC 8829 requires the answer's m-lines to appear in the same order
+        as the offer's. The device SDP may have (video, audio) while the
+        browser offer has (audio, video) — or vice versa.
+        """
+
+        def _extract_mline_order(sdp: str) -> list[str]:
+            return [line.split()[0].split("=")[1] for line in sdp.split("\r\n") if line.startswith("m=")]
+
+        offer_order = _extract_mline_order(offer_sdp)
+        answer_order = _extract_mline_order(answer_sdp)
+
+        if offer_order == answer_order:
+            return answer_sdp
+
+        # Split answer SDP into session-level lines and m-sections
+        lines = answer_sdp.split("\r\n")
+        session_lines: list[str] = []
+        sections: dict[str, list[str]] = {}
+        current_type: str | None = None
+
+        for line in lines:
+            if line.startswith("m="):
+                current_type = line.split()[0].split("=")[1]
+                sections.setdefault(current_type, []).append(line)
+            elif current_type is None:
+                session_lines.append(line)
+            else:
+                sections[current_type].append(line)
+
+        # Rebuild in offer's order
+        result = list(session_lines)
+        for mtype in offer_order:
+            if mtype in sections:
+                result.extend(sections[mtype])
+
+        return "\r\n".join(result)
+
+    @staticmethod
     def convert_offer_to_answer_sdp(offer_sdp: str) -> str:
         """Convert a browser SDP offer to be usable as an answer to the device.
 
@@ -663,7 +704,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 # The browser needs a remote SDP to complete the WebRTC handshake.
                 # The device's offer serves this role — it contains the device's
                 # media capabilities, ICE credentials, and DTLS fingerprint.
-                device_sdp = active_call["sdp"]
+                # Reorder m-lines to match the browser's offer (RFC 8829).
+                device_sdp = self._reorder_mlines(active_call["sdp"], offer_sdp)
                 send_message(WebRTCAnswer(answer=device_sdp))
             else:
                 # --- Offer mode: initiate on-demand call ---

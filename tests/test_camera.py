@@ -338,3 +338,59 @@ class TestConvertOfferToAnswerSdp:
         result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
         assert result.count("a=setup:active") == 2
         assert "a=setup:actpass" not in result
+
+
+class TestReorderMlines:
+    """Tests for BticinoWebRTCCamera._reorder_mlines static method."""
+
+    def test_matching_order_unchanged(self) -> None:
+        """When order already matches, SDP is returned as-is."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\n"
+        answer = (
+            "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"
+        )
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+        assert result == answer
+
+    def test_mismatched_order_reordered(self) -> None:
+        """When offer is (audio, video) but answer is (video, audio), reorder."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 1 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=rtpmap:111 opus/48000/2\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=mid:1\r\n"
+            "a=rtpmap:96 H264/90000\r\n"
+        )
+        answer = (
+            "v=0\r\n"
+            "o=- 2 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=sendonly\r\n"
+            "a=fingerprint:sha-256 AA:BB\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=sendrecv\r\n"
+            "a=fingerprint:sha-256 AA:BB\r\n"
+        )
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+        lines = result.split("\r\n")
+        mlines = [line for line in lines if line.startswith("m=")]
+        assert mlines[0].startswith("m=audio")
+        assert mlines[1].startswith("m=video")
+
+    def test_session_lines_preserved(self) -> None:
+        """Session-level lines (before first m=) are preserved."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\ns=-\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+        answer = "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n"
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+        assert result.startswith("v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\n")
