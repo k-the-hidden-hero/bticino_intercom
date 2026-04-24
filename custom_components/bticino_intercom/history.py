@@ -343,12 +343,13 @@ class EventHistoryStore:
         """Generate a SEELE-style 'SOUND ONLY' placeholder and write it to disk."""
         safe_event = event_id.replace("/", "_").replace("\\", "_")
         safe_module = module_id.replace("/", "_").replace("\\", "_").replace(":", "_")
-        rel = f"{safe_module}/{safe_event}_snapshot.jpg"
+        rel = f"{safe_module}/{safe_event}_snapshot.png"
         target = self._root / rel
 
         def _generate_and_write() -> None:
             import io
 
+            # Pillow is bundled with Home Assistant (used internally for image processing)
             from PIL import Image, ImageDraw, ImageFont
 
             width, height = 640, 480
@@ -367,8 +368,8 @@ class EventHistoryStore:
 
         try:
             await self.hass.async_add_executor_job(_generate_and_write)
-        except OSError:
-            _LOGGER.warning("Failed to generate placeholder for event %s", event_id)
+        except Exception:
+            _LOGGER.warning("Failed to generate placeholder for event %s", event_id, exc_info=True)
             return None
         _LOGGER.debug("Generated SOUND ONLY placeholder for event %s", event_id)
         return rel

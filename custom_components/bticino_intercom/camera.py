@@ -123,7 +123,8 @@ class BticinoBaseEventCamera(CoordinatorEntity[BticinoIntercomCoordinator], Came
             return False
         if self._image_url is not None or self._cached_image is not None:
             return True
-        return self.coordinator.data.get("last_event") is not None
+        last_event = self.coordinator.data.get("last_event")
+        return bool(last_event and last_event.get("type"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
