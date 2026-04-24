@@ -484,7 +484,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             vignette_url = extra_params.get("vignette_url")
             timestamp = extra_params.get("timestamp")
             now_ts = int(datetime.now(UTC).timestamp())
-            event_id = extra_params.get("session_id") or f"{now_ts}-{device_id}"
+            # Use the same event_id logic as the RTC offer handler so the
+            # incoming_call push updates the record created by the offer.
+            calling_module = self._active_call.get("module_id") if self._active_call else None
+            record_module = calling_module or device_id
+            event_id = extra_params.get("session_id") or f"{now_ts}-{record_module}"
 
             # Download images to local storage BEFORE firing events,
             # so automations/notifications have images available immediately.

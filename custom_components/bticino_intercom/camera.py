@@ -346,8 +346,6 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
         if store is not None:
             events = store.list_events(module_id=self._module_id, limit=1)
-            if not events:
-                events = store.list_events(limit=1)
             if events:
                 event = events[0]
                 eid = event.get("event_id")
