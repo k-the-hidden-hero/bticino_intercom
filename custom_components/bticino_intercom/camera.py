@@ -784,7 +784,28 @@ class BticinoCallHomeCamera(BticinoWebRTCCamera):
             module_name="Call Home",
         )
         self._attr_unique_id = f"{coordinator.entry.entry_id}_call_home"
+        self._poster: bytes | None = None
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
-        """No poster image for voice-only calls."""
-        return None
+        """Return a static 'VOICE ONLY' placeholder."""
+        if self._poster is None:
+            self._poster = await self.hass.async_add_executor_job(self._generate_poster)
+        return self._poster
+
+    @staticmethod
+    def _generate_poster() -> bytes:
+        import io
+
+        from PIL import Image, ImageDraw, ImageFont
+
+        width, height = 640, 480
+        img = Image.new("RGB", (width, height), color=(0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        font_title = ImageFont.load_default(size=42)
+        font_sub = ImageFont.load_default(size=28)
+        draw.text((width / 2, height / 2 - 40), "CALL HOME", fill=(255, 255, 255), font=font_title, anchor="mm")
+        draw.text((width / 2, height / 2 + 20), "VOICE ONLY", fill=(180, 0, 0), font=font_sub, anchor="mm")
+        draw.rectangle([15, 15, width - 15, height - 15], outline=(60, 60, 60), width=2)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
