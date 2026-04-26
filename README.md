@@ -244,6 +244,102 @@ data:
 
 ---
 
+## v2.0 Beta Testing
+
+v2.0 is currently in release candidate stage. If you want to help test, here's what you need.
+
+### What to install
+
+You need **two** custom components for the full v2.0 experience:
+
+| Component | What it does | Install |
+|---|---|---|
+| **[bticino_intercom](https://github.com/k-the-hidden-hero/bticino_intercom)** | The integration (camera, sensors, locks, events, call history) | HACS or manual |
+| **[bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras)** | Custom Lovelace card with live video, two-way audio, call history UI | Manual (copy JS to `www/`) |
+
+> [!IMPORTANT]
+> **Do NOT use AlexxIT's WebRTC integration** (`custom_components/webrtc`) or other third-party WebRTC players to display the BTicino camera. They are not compatible with the BTicino signaling protocol and will cause crashes, especially on iOS/Safari (WebKit). Use the dedicated card from `bticino_ha_extras`.
+
+### Installing the RC
+
+**Integration (HACS):**
+1. In HACS, go to **BTicino Intercom** > click the three-dot menu > **Redownload**
+2. Enable **"Show beta versions"** and select the latest `2.0.0-rcX`
+3. Restart Home Assistant
+
+**Integration (manual):**
+1. Download the latest `v2.0.0-rcX` from [Releases](https://github.com/k-the-hidden-hero/bticino_intercom/releases)
+2. Replace `custom_components/bticino_intercom/` with the new version
+3. Clear `__pycache__` if using file sync: `find custom_components/bticino_intercom -name __pycache__ -exec rm -rf {} +`
+4. Restart Home Assistant
+
+**Custom card:**
+1. Download `bticino-intercom-card.js` from [bticino_ha_extras releases](https://github.com/k-the-hidden-hero/bticino_ha_extras/releases)
+2. Copy to `config/www/bticino-intercom-card.js`
+3. Add as a Dashboard resource: **Settings > Dashboards > Resources > Add Resource**
+   - URL: `/local/bticino-intercom-card.js`
+   - Type: **JavaScript Module**
+4. Hard-refresh the browser (`Ctrl+Shift+R`) to clear cache
+
+### Dashboard card example
+
+```yaml
+type: custom:bticino-intercom-card
+intercoms:
+  - name: Citofono
+    camera: camera.bticino_intercom_front_door
+    actions:
+      - entity: lock.front_gate
+        service: lock.unlock
+```
+
+For multiple intercoms:
+
+```yaml
+type: custom:bticino-intercom-card
+intercoms:
+  - name: Ingresso principale
+    camera: camera.bticino_intercom_front_door
+    actions:
+      - entity: lock.main_gate
+        service: lock.unlock
+      - entity: lock.building_door
+        service: lock.unlock
+  - name: Ingresso laterale
+    camera: camera.bticino_intercom_side_entrance
+    actions:
+      - entity: lock.side_gate
+        service: lock.unlock
+```
+
+### Browser compatibility
+
+| Browser | Status | Notes |
+|---|---|---|
+| Chrome / Chromium (Desktop) | Supported | Full video + audio |
+| Chrome (Android) | Supported | Full video + audio |
+| Edge (Chromium) | Supported | Full video + audio |
+| Safari / iOS (any browser) | Not supported | All iOS browsers use WebKit. The BTicino device firmware uses Chrome-specific RTP payload types — see [Firefox investigation](docs/firefox-webrtc-investigation.md) |
+| Firefox | Not supported | Device firmware bug: hardcoded Chrome RTP payload types (PT=111/Opus, PT=109/H264) |
+| HA Companion (Android) | Supported | Uses system WebView (Chromium) |
+| HA Companion (iOS) | Not supported | Uses WebKit (same limitation as Safari) |
+
+> [!NOTE]
+> The browser limitation is caused by the BTicino device firmware (BNC1), which hardcodes Chrome/libwebrtc RTP payload type numbers in its media engine regardless of SDP negotiation. This cannot be fixed from the integration side. The official Netatmo app works on iOS because it bundles the same `libwebrtc` engine as Chrome, not because it does any special handling.
+
+### Reporting issues
+
+When reporting a v2.0 bug:
+1. Enable debug logging (see [Troubleshooting](#troubleshooting))
+2. Reproduce the issue
+3. Download the full log from **Settings > System > Logs > Download full log**
+4. Open an [issue](https://github.com/k-the-hidden-hero/bticino_intercom/issues) with:
+   - Your HA version, device model, integration version
+   - The browser you're using
+   - The full debug log attached (not pasted inline)
+
+---
+
 ## Requirements
 
 - Home Assistant 2026.3 or later

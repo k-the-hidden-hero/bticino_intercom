@@ -1,13 +1,14 @@
-# Firefox WebRTC Investigation — BTicino Classe 100X
+# Browser WebRTC Compatibility — BTicino Classe 100X
 
-## Status: Firefox NOT SUPPORTED (device firmware limitation)
+## Status: Chrome/Chromium ONLY (device firmware limitation)
 
 ## Summary
 
-WebRTC live video streaming works in Chrome/Chromium but fails in Firefox.
-After extensive debugging (pcap captures, MOZ_LOG analysis, SDP manipulation,
-4 AI agent analyses), the root cause was identified as a **device firmware bug**
-that cannot be fixed from the integration side.
+WebRTC live video streaming works in Chrome/Chromium but fails in Firefox
+and Safari/iOS. After extensive debugging (pcap captures, MOZ_LOG analysis,
+SDP manipulation, APK reverse engineering, iOS log analysis), the root cause
+was identified as a **device firmware bug** that cannot be fixed from the
+integration side.
 
 ## Root Cause: Hardcoded RTP Payload Types
 
@@ -89,9 +90,85 @@ go2rtc could theoretically re-packetize RTP with correct PTs, but:
 - go2rtc expects sync `result` message with answer SDP, HA sends async subscription events
 - No fix available; would require patching go2rtc's Go source code
 
+## iOS / Safari Investigation (2026-04-26)
+
+### Issue #48: "Sound Only" crash on iOS
+
+A user reported that the HA Companion app on iOS shows "Sound Only", briefly
+flashes video, then crashes to black. Analysis of the debug logs revealed
+this is **NOT the same issue as Firefox**.
+
+### SDP negotiation is clean
+
+Safari/WebKit on iOS 18.7 negotiates payload types that the device correctly
+mirrors:
+
+| Codec | Safari Offer PT | Device Answer PT | Match? |
+|-------|----------------|-----------------|--------|
+| Opus  | 111            | 111             | Yes    |
+| H264  | 96             | 96              | Yes    |
+
+Unlike Firefox, the SDP exchange completes cleanly. Video briefly appears,
+confirming that ICE, DTLS, SRTP, and RTP media all work momentarily.
+
+### Root cause: third-party player crash
+
+The crash is in **AlexxIT's WebRTC integration** (`video-rtc.js:452`), not
+in `bticino_intercom`:
+
+```
+InvalidStateError: The object is in an invalid state.
+at /webrtc/video-rtc.js:452:39
+```
+
+WebKit has a stricter `RTCPeerConnection` state machine than Chrome. The
+AlexxIT card tries to manipulate the peer connection in an invalid state,
+causing the crash. Rapid retries then exhaust the device's single-peer
+limit ("Max number of peers reached").
+
+**Solution:** Use the dedicated card from
+[bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras)
+instead of AlexxIT's WebRTC integration.
+
+### However: iOS still unsupported for live video
+
+Even with the correct card, iOS/Safari cannot render live video because of
+the same firmware PT mismatch. All browsers on iOS use WebKit (Apple
+requirement), and the device sends RTP with Chrome-hardcoded payload types
+at the packet level regardless of SDP negotiation.
+
+The video briefly appearing in issue #48 may have been a transient frame
+from the initial SDP-matching packets before the device's RTP engine
+switches to hardcoded PTs, or from the AlexxIT card's own buffering.
+
+### APK reverse engineering confirmation (2026-04-26)
+
+Full decompilation of the Netatmo Camera Android APK (v4.1.1.3, JADX)
+confirmed:
+
+- **Zero SDP manipulation** — no codec reordering, no PT rewriting, no munging
+- **No codec preferences set** — no `setCodecPreferences()`, no hardcoded PTs
+- **Uses bundled libwebrtc** — same native library as Chrome
+- **No platform-specific handling** — no iOS vs Android codec logic
+- The app works because it uses the same WebRTC engine as the device firmware,
+  not because of any special handling
+
+### Browser compatibility summary
+
+| Browser | Video | Audio | Notes |
+|---------|-------|-------|-------|
+| Chrome (Desktop) | Yes | Yes | Reference platform |
+| Chrome (Android) | Yes | Yes | Same engine |
+| Edge (Chromium) | Yes | Yes | Same engine |
+| HA Companion (Android) | Yes | Yes | Chromium WebView |
+| Firefox | No | No | PT mismatch: device sends PT=111/109, Firefox expects different |
+| Safari (macOS) | No | No | PT mismatch at RTP level (same as Firefox) |
+| Any browser on iOS | No | No | All use WebKit (Apple requirement) |
+| HA Companion (iOS) | No | No | Uses WebKit |
+
 ## Recommendations
 
-1. **Document Firefox as unsupported** in README and card documentation
-2. **Monitor go2rtc #1468** — when fixed, go2rtc proxy could solve the PT mismatch
+1. **Document as Chrome/Chromium only** in README and card documentation
+2. **Monitor go2rtc #1468** — when fixed, go2rtc proxy could solve the PT mismatch for all browsers
 3. **File BTicino/Netatmo bug report** about hardcoded PT mapping (unlikely to be fixed)
 4. **Consider WebRTC-to-RTSP bridge** as future alternative (e.g., mediamtx, Pion WebRTC)
