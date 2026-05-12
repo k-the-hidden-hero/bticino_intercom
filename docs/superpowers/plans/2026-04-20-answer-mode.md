@@ -827,7 +827,7 @@ _checkAutoAnswer() {
 
 - [ ] **Step 2: Deploy and test**
 
-Navigate to `http://ha.asgard.lan:8123/lovelace/debug?answer=camera.bticino_intercom_casella_citofono_strada`. Verify:
+Navigate to `http://ha.asgard.lan:8123/lovelace/debug?answer=camera.bticino_intercom_myhome_citofono_strada`. Verify:
 - Card auto-switches to the correct intercom
 - WebRTC call starts automatically
 - URL param is removed from address bar

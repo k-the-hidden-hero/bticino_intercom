@@ -146,13 +146,13 @@ def coordinator(
 
     # Pre-populate data as if a successful poll had already occurred
     coord.data = {
-        "homes": {HOME_ID: {"name": "Casella"}},
+        "homes": {HOME_ID: {"name": "MyHome"}},
         "modules": mock_modules_data,
         "last_event": {},
         "events_history": {HOME_ID: []},
     }
     coord._main_device_id = BRIDGE_MAC
-    coord._home_name = "Casella"
+    coord._home_name = "MyHome"
 
     return coord
 
@@ -232,7 +232,7 @@ def ws_incoming_call() -> dict[str, Any]:
             "event_type": "incoming_call",
             "device_id": BRIDGE_MAC,
             "home_id": HOME_ID,
-            "home_name": "Casella",
+            "home_name": "MyHome",
             "timestamp": 1774877242,
             "camera_id": BRIDGE_MAC,
             "event_id": "69ca7a3aeeefc6e8a1cf8cef",
@@ -253,7 +253,7 @@ def ws_missed_call() -> dict[str, Any]:
             "event_type": "missed_call",
             "device_id": BRIDGE_MAC,
             "home_id": HOME_ID,
-            "home_name": "Casella",
+            "home_name": "MyHome",
             "timestamp": 1774877268,
             "camera_id": BRIDGE_MAC,
             "event_id": "69ca7a3aeeefc6e8a1cf8cef",
@@ -272,7 +272,7 @@ def ws_accepted_call() -> dict[str, Any]:
             "event_type": "accepted_call",
             "device_id": BRIDGE_MAC,
             "home_id": HOME_ID,
-            "home_name": "Casella",
+            "home_name": "MyHome",
             "timestamp": 1774877289,
             "camera_id": BRIDGE_MAC,
             "event_id": "69ca7a5fa249cd0e436e9bc4",

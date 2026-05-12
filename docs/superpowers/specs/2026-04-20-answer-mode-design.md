@@ -26,7 +26,7 @@ Single event name with `type` field to distinguish phases.
   "session_id": "abc-123",
   "snapshot_url": "/api/bticino_intercom/image/.../snapshot",
   "vignette_url": "/api/bticino_intercom/image/.../vignette",
-  "camera_entity_id": "camera.bticino_intercom_casella_citofono_strada"
+  "camera_entity_id": "camera.bticino_intercom_myhome_citofono_strada"
 }
 ```
 
