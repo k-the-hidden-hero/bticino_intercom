@@ -95,6 +95,122 @@ async def test_record_and_resolve_event(
     assert vig_path is not None and vig_path.read_bytes() == b"VIGNETTE"
 
 
+async def test_record_call_without_url_does_not_eagerly_generate_placeholder(
+    hass: HomeAssistant,
+    patch_session: _FakeSession,
+    tmp_path,
+) -> None:
+    """Regression test for issue #48.
+
+    When the RTC offer push records a call ahead of the incoming_call status
+    push, ``async_record_call`` is called once with no URLs. It must NOT save
+    a SOUND ONLY placeholder yet — otherwise a subsequent call with the real
+    URLs is skipped (see lines 188-189 of history.py: download is skipped if
+    ``snapshot_file`` is already set), leaving the user stuck with the
+    placeholder forever.
+    """
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_48a")
+        await store.async_load()
+        await store.async_record_call(
+            event_id="sess-48a",
+            module_id="00:11:22:33:44:55",
+            module_name="Front Door",
+            snapshot_url=None,
+            vignette_url=None,
+        )
+
+    event = store.get_event("sess-48a")
+    assert event is not None
+    assert event["snapshot_file"] is None, "Placeholder must not be generated until call closes"
+
+
+async def test_real_snapshot_replaces_eager_record_for_in_progress_call(
+    hass: HomeAssistant,
+    patch_session: _FakeSession,
+    tmp_path,
+) -> None:
+    """Regression test for issue #48.
+
+    Simulates the real coordinator flow: RTC offer creates the record without
+    URLs, then ``incoming_call`` push enriches it with snapshot/vignette URLs.
+    The real snapshot must end up on disk (not the SOUND ONLY placeholder).
+    """
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_48b")
+        await store.async_load()
+        # Step 1: RTC offer (no URLs yet)
+        await store.async_record_call(
+            event_id="sess-48b",
+            module_id="00:11:22:33:44:55",
+            module_name="Front Door",
+            snapshot_url=None,
+            vignette_url=None,
+        )
+        # Step 2: incoming_call push (with real URLs)
+        await store.async_record_call(
+            event_id="sess-48b",
+            module_id="00:11:22:33:44:55",
+            module_name="Front Door",
+            snapshot_url="https://example.com/snap.jpg",
+            vignette_url="https://example.com/vig.jpg",
+        )
+
+    snap_path = store.resolve_image_path("sess-48b", "snapshot")
+    vig_path = store.resolve_image_path("sess-48b", "vignette")
+    assert snap_path is not None and snap_path.read_bytes() == b"SNAPSHOT"
+    assert vig_path is not None and vig_path.read_bytes() == b"VIGNETTE"
+
+
+async def test_close_call_generates_placeholder_for_voice_only_call(
+    hass: HomeAssistant,
+    patch_session: _FakeSession,
+    tmp_path,
+) -> None:
+    """A voice-only call (no snapshot ever delivered) should get the SOUND ONLY
+    placeholder when the call is closed."""
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_48c")
+        await store.async_load()
+        await store.async_record_call(
+            event_id="sess-48c",
+            module_id="vmod",
+            module_name="Voice Only",
+            snapshot_url=None,
+            vignette_url=None,
+        )
+        await store.async_close_call(event_id="sess-48c", event_type="terminated")
+
+    event = store.get_event("sess-48c")
+    assert event is not None
+    assert event["snapshot_file"], "Voice-only call should have placeholder after close"
+    placeholder_path = store.resolve_image_path("sess-48c", "snapshot")
+    assert placeholder_path is not None and placeholder_path.exists()
+
+
+async def test_close_call_does_not_overwrite_real_snapshot_with_placeholder(
+    hass: HomeAssistant,
+    patch_session: _FakeSession,
+    tmp_path,
+) -> None:
+    """If a real snapshot was downloaded, closing the call must not replace it
+    with the SOUND ONLY placeholder."""
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_48d")
+        await store.async_load()
+        await store.async_record_call(
+            event_id="sess-48d",
+            module_id="m",
+            module_name="Front",
+            snapshot_url="https://example.com/snap.jpg",
+            vignette_url=None,
+        )
+        await store.async_close_call(event_id="sess-48d", event_type="terminated")
+
+    snap_path = store.resolve_image_path("sess-48d", "snapshot")
+    assert snap_path is not None and snap_path.read_bytes() == b"SNAPSHOT"
+
+
 async def test_close_call_marks_answered(
     hass: HomeAssistant,
     patch_session: _FakeSession,

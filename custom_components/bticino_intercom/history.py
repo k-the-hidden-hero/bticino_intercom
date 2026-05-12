@@ -192,11 +192,11 @@ class EventHistoryStore:
                 if stored:
                     record[f"{kind}_file"] = stored
 
-            # Generate a SEELE-style placeholder for voice-only calls
-            if not record.get("snapshot_file") and not snapshot_url:
-                stored = await self._generate_placeholder(module_id, event_id, module_name or module_id)
-                if stored:
-                    record["snapshot_file"] = stored
+            # Note: SOUND ONLY placeholder generation is deferred to
+            # async_close_call. The RTC offer handler records the call before
+            # the incoming_call push arrives with the real URLs; generating
+            # the placeholder eagerly here would set snapshot_file and cause
+            # the subsequent real download to be skipped (issue #48).
 
             await self._persist_locked()
             if created:
@@ -225,6 +225,19 @@ class EventHistoryStore:
             record["event_type"] = event_type
             record["ended_at"] = ended_at or _now_ts()
             record["answered"] = event_type == "answered_elsewhere"
+
+            # Voice-only calls (or any call where the snapshot push never
+            # arrived) get a SOUND ONLY placeholder at close time. We defer
+            # this until close because the RTC offer creates the record
+            # before the incoming_call push delivers the real URLs (#48).
+            if not record.get("snapshot_file"):
+                module_id = record.get("module_id")
+                module_name = record.get("module_name") or module_id
+                if module_id:
+                    stored = await self._generate_placeholder(module_id, event_id, module_name)
+                    if stored:
+                        record["snapshot_file"] = stored
+
             await self._persist_locked()
 
     async def async_apply_retention(
