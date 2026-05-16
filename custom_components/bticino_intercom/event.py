@@ -3,7 +3,7 @@
 import logging
 from typing import ClassVar
 
-from homeassistant.components.event import EventDeviceClass, EventEntity
+from homeassistant.components.event import DoorbellEventType, EventDeviceClass, EventEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -41,7 +41,7 @@ class BticinoDoorbellEvent(BticinoEntity, EventEntity):
     """Event entity for BTicino doorbell ring."""
 
     _attr_device_class = EventDeviceClass.DOORBELL
-    _attr_event_types: ClassVar[list[str]] = ["ring"]
+    _attr_event_types: ClassVar[list[str]] = [DoorbellEventType.RING]
     _attr_icon = "mdi:doorbell-video"
 
     def __init__(self, coordinator: BticinoIntercomCoordinator, module_id: str) -> None:
@@ -56,7 +56,7 @@ class BticinoDoorbellEvent(BticinoEntity, EventEntity):
         """Handle the dispatcher signal for incoming calls."""
         if module_id == self._module_id and state:
             _LOGGER.debug("Doorbell event triggered for %s", self.entity_id)
-            self._trigger_event("ring", {"module_id": module_id})
+            self._trigger_event(DoorbellEventType.RING, {"module_id": module_id})
             self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
