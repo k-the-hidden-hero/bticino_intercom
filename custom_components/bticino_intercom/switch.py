@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import timedelta
 import logging
 from typing import Any
 
@@ -15,6 +16,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+SCAN_INTERVAL = timedelta(seconds=30)
 
 DEFAULT_SCHEDULE_DND = {
     "dnd_days": "1111111",
