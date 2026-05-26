@@ -18,6 +18,7 @@ from pybticino.exceptions import ApiError, AuthError
 from .const import (
     CALL_RETRANSMIT_WINDOW,
     CALL_SESSION_MAX_DURATION,
+    CLOSED_SESSION_DEDUP_WINDOW,
     DATA_LAST_EVENT,
     DEFAULT_NAME,
     DOMAIN,
@@ -87,6 +88,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         #  "watchdog": asyncio.Task | None,
         #  "session_id": str | None}
         self._active_calls: dict[str, dict[str, Any]] = {}
+        # Recently closed session_ids → datetime when they were closed.
+        # Used to dedup duplicate terminate/rescind RTC pushes that Netatmo
+        # broadcasts to every device registered for push notifications.
+        # See issue #56.
+        self._closed_sessions: dict[str, datetime] = {}
         # Current active call for WebRTC signaling (offer/answer SDP exchange)
         self._active_call: dict[str, Any] | None = None
         # Populated by __init__.py after entry setup.
@@ -424,6 +430,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return True
 
         if rtc_action == "rescind":
+            if session_id and self._is_session_recently_closed(session_id):
+                _LOGGER.debug(
+                    "Ignoring retransmitted rescind for session %s (already closed)",
+                    session_id,
+                )
+                return False
+
             _LOGGER.info("Call answered elsewhere (RTC rescind) for %s", display_name)
 
             closing_session_id = (
@@ -433,6 +446,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             )
             dedup_id = calling_module_id or display_id
             self._end_call_session(dedup_id, reason="rescind")
+            if closing_session_id:
+                self._mark_session_closed(closing_session_id)
             if calling_module_id:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
             self._fire_call_event("end", calling_module_id, reason="rescind")
@@ -447,6 +462,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return True
 
         if rtc_action == "terminate":
+            if session_id and self._is_session_recently_closed(session_id):
+                _LOGGER.debug(
+                    "Ignoring retransmitted terminate for session %s (already closed)",
+                    session_id,
+                )
+                return False
+
             _LOGGER.info("Call terminated (RTC terminate) for %s", display_name)
 
             closing_session_id = (
@@ -456,6 +478,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             )
             dedup_id = calling_module_id or display_id
             self._end_call_session(dedup_id, reason="terminate")
+            if closing_session_id:
+                self._mark_session_closed(closing_session_id)
             if calling_module_id:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module_id)
             self._fire_call_event("end", calling_module_id, reason="terminate")
@@ -630,6 +654,29 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if watchdog is not None and not watchdog.done():
             watchdog.cancel()
         _LOGGER.debug("Call session for module %s closed (reason=%s)", module_id, reason)
+
+    def _mark_session_closed(self, session_id: str) -> None:
+        """Record session_id as recently closed (for terminate/rescind dedup).
+
+        Also opportunistically purges entries older than the dedup window so
+        the dict can't grow without bound.
+        """
+        if not session_id:
+            return
+        now = datetime.now(UTC)
+        window = timedelta(seconds=CLOSED_SESSION_DEDUP_WINDOW)
+        cutoff = now - window
+        self._closed_sessions = {sid: ts for sid, ts in self._closed_sessions.items() if ts > cutoff}
+        self._closed_sessions[session_id] = now
+
+    def _is_session_recently_closed(self, session_id: str) -> bool:
+        """Return True if this session_id was closed within the dedup window."""
+        if not session_id:
+            return False
+        closed_at = self._closed_sessions.get(session_id)
+        if closed_at is None:
+            return False
+        return (datetime.now(UTC) - closed_at).total_seconds() < CLOSED_SESSION_DEDUP_WINDOW
 
     def fire_call_timeout(self, module_id: str) -> None:
         """Fire an end event when the call times out."""

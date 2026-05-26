@@ -658,3 +658,47 @@ class TestCallEventEmission:
         assert end_events[0].data["reason"] == "timeout"
         # active_call should be cleared after timeout
         assert coordinator.active_call is None
+
+
+class TestRtcTerminateDedup:
+    """Regression tests for issue #56 — duplicate RTC terminate/rescind
+    pushes from Netatmo (broadcast to every push receiver with the same
+    session_id) must not each trigger an API refresh, or we hit 429."""
+
+    async def test_duplicate_terminates_trigger_single_refresh(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        ws_rtc_terminate: dict,
+    ) -> None:
+        """6 duplicate terminates for the same session must call async_request_refresh once."""
+        # Process the offer first (sets active_call); mock refresh during setup
+        # so we don't count the offer's own refresh.
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+            await coordinator._handle_websocket_message(ws_rtc_offer)
+
+        # Now: 6 identical terminate messages arrive (push retransmits)
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()) as mock_refresh:
+            for _ in range(6):
+                await coordinator._handle_websocket_message(ws_rtc_terminate)
+
+        assert mock_refresh.call_count == 1, (
+            f"Expected 1 refresh (first terminate only), got {mock_refresh.call_count}. "
+            "This is the 429 cascade from issue #56."
+        )
+
+    async def test_duplicate_rescinds_trigger_single_refresh(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        ws_rtc_rescind: dict,
+    ) -> None:
+        """6 duplicate rescinds for the same session must call async_request_refresh once."""
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+            await coordinator._handle_websocket_message(ws_rtc_offer)
+
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()) as mock_refresh:
+            for _ in range(6):
+                await coordinator._handle_websocket_message(ws_rtc_rescind)
+
+        assert mock_refresh.call_count == 1

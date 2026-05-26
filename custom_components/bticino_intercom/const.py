@@ -80,6 +80,10 @@ IMAGE_CACHE_SECONDS = 300  # 5 minutes
 CALL_RETRANSMIT_WINDOW = 15
 # Absolute cap on session duration, last safety net.
 CALL_SESSION_MAX_DURATION = 180
+# Window during which a session_id is remembered as "recently closed",
+# so duplicate terminate/rescind RTC events (Netatmo push retransmits
+# to multiple receivers) don't trigger redundant API refreshes. Fixes #56.
+CLOSED_SESSION_DEDUP_WINDOW = 60  # seconds
 
 # --- Event history ---
 HISTORY_STORAGE_VERSION = 1
