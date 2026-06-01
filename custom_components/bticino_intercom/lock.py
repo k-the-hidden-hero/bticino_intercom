@@ -162,6 +162,10 @@ class BticinoLock(BticinoEntity, LockEntity):
             self._attr_is_locked = True
             self.async_write_ha_state()
 
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open (unlatch) the door — a momentary unlock pulse."""
+        await self.async_unlock(**kwargs)
+
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock with optimistic state."""
         if self._relock_canceller:
@@ -288,6 +292,10 @@ class BticinoLightAsLock(BticinoEntity, LockEntity):
                 self._relock_canceller = None
             self._attr_is_locked = True
             self.async_write_ha_state()
+
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open the door (turn on the light) — a momentary pulse."""
+        await self.async_unlock(**kwargs)
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the door (turn off the light)."""
