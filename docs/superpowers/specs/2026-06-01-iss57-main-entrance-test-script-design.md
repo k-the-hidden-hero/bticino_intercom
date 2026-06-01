@@ -53,8 +53,10 @@ the real "Main Entrance" lock feature.
 | Convention going forward | New `scripts/dev/` folder for dev/debug scripts; `ISS<issue-number>_` filename prefix |
 | Credentials input | **Interactive** prompts (email + `getpass` password), not env vars — easier for a non-technical reporter, no secrets left in shell history |
 | Home selection | Auto-detect; if multiple homes, list and prompt |
-| Safety | Print full module inventory, then an explicit **typed confirmation** before sending the open command (it opens a real door) |
-| Target | The **bridge id** with `set_module_state(module_id=bridge_id, bridge_id=bridge_id, state={"lock": False})` |
+| Safety | Print full module inventory, then an explicit **typed confirmation** before each send (it commands a real door) |
+| Target | The **bridge id** with `set_module_state(module_id=bridge_id, bridge_id=bridge_id, state={...})` |
+| Both payloads | The script can send **unlock** `{"lock": false}` *and* **lock** `{"lock": true}` — we don't know whether the reporter's main entrance supports both or is a momentary open-only |
+| Interaction model | **Interactive loop (REPL)**: after auth + inventory, keep offering unlock / lock / quit; do not exit after one command |
 | Escape hatch | Optional `--module-id <id>` to override the target (so the reporter can also test a specific BNDL if asked) |
 | Base pattern | `pybticino/examples/unlock_door.py` |
 
@@ -63,6 +65,7 @@ the real "Main Entrance" lock feature.
 Based on `examples/unlock_door.py`, adapted to interactive + bridge-targeting:
 
 ```
+SETUP (once):
 1. Prompt for email (input) and password (getpass).
 2. AuthHandler(email, password) → AsyncAccount(auth).
 3. await account.async_update_topology().
@@ -77,18 +80,28 @@ Based on `examples/unlock_door.py`, adapted to interactive + bridge-targeting:
      name | type | id | reachable  (+ note which one is the bridge / chosen target)
    This doubles as a second data source alongside the HA diagnostics dump.
 7. Determine timezone from home.raw_data["timezone"] (warn if missing).
-8. Show the exact command to be sent:
-     setstate → module_id=<target>, bridge_id=<bridge>, state={"lock": false}
-9. SAFETY GATE: require the user to type a confirmation word (e.g. `OPEN`)
-   to proceed; anything else aborts without sending.
+
+LOOP (until user quits):
+8. Present a menu:
+     [u] send UNLOCK / open  →  state={"lock": false}
+     [l] send LOCK / close    →  state={"lock": true}
+     [q] quit
+9. On u or l: show the exact command (module_id=<target>, bridge_id=<bridge>,
+   state=...), then a SAFETY GATE — type `YES` to send, anything else cancels
+   and returns to the menu (it commands a real door).
 10. await account.async_set_module_state(home_id, module_id=target,
-        state={"lock": False}, timezone=tz, bridge_id=bridge_id).
-11. Print result; remind that the door may re-lock automatically.
-12. finally: await auth.close_session().
+        state=<payload>, timezone=tz, bridge_id=bridge_id); print result.
+11. Loop back to the menu (the session stays open for repeated tries).
+12. On q (or Ctrl-C): break the loop.
+
+TEARDOWN:
+13. finally: await auth.close_session().
 ```
 
 Error handling mirrors the example: catch `AuthError`, `ApiError`
-(status + message), generic `Exception`, always close the session.
+(status + message), generic `Exception`. An `ApiError` on a single send is
+printed and the loop continues (so a failed lock doesn't kill the session);
+auth/teardown errors still exit. Session always closed in `finally`.
 
 ### CLI
 
@@ -117,9 +130,12 @@ iss57-main-entrance-test/
    Settings → Devices & services → BTicino Intercom → ⋮ → *Download diagnostics*;
    attach the JSON to the issue.
 4. **Step 2 — Run the script** — `python3 ISS57_test_main_entrance_open.py`,
-   enter email/password, review the printed module list, type `OPEN` to test.
-5. **Step 3 — Report back** — did the main entrance physically open? Paste the
-   script's final output (it does not contain your password).
+   enter email/password, review the printed module list, then use the menu:
+   `u` to send unlock/open, `l` to send lock/close, `q` to quit. Each send asks
+   you to type `YES` first. The script keeps looping so you can try both.
+5. **Step 3 — Report back** — did the main entrance physically open on `u`?
+   Did `l` do anything? Paste the script's output (it does not contain your
+   password).
 
 ## Issue #57 reply (English) — outline
 
@@ -130,6 +146,11 @@ iss57-main-entrance-test/
   lock entities don't open the main door.
 - Ask for two things: (1) the **HA diagnostics** JSON, (2) the **result of the
   attached test script** (attach ZIP). Note the safety warning.
+- **Lock vs unlock note:** we don't know how your main entrance is wired —
+  whether it supports both lock and unlock, or is open-only — so the script can
+  send **both** payloads (`{"lock": false}` and `{"lock": true}`). Let us know
+  which one(s) actually do something. Most intercoms just *open* and assume the
+  door re-closes/re-locks on its own.
 - Set expectation: if the script confirms it works, a custom test build with a
   proper "Main Entrance" lock follows.
 
@@ -144,7 +165,8 @@ iss57-main-entrance-test/
 
 ## Open questions for review
 
-1. Confirmation word — `OPEN` ok, or prefer typing the module id?
-2. Should the script also offer to **re-lock** (`{"lock": true}`) after, or leave
-   that to the device's auto-relock? (Leaning: leave it — main entrances pulse.)
-3. ZIP top-level folder name `iss57-main-entrance-test` ok?
+1. ZIP top-level folder name `iss57-main-entrance-test` — ok?
+
+**Resolved:** the script is an interactive **loop** offering both unlock and lock
+each cycle (not one-shot); safety gate is typing `YES` per send; the issue reply
+carries the lock-vs-unlock explanation.
