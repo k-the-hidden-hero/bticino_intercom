@@ -70,7 +70,7 @@ import uuid
 
 import aiohttp
 from pybticino import AsyncAccount, AuthError, AuthHandler
-from pybticino.const import BASE_URL
+from pybticino.const import BASE_URL, DEFAULT_APP_VERSION, build_user_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 _LOGGER = logging.getLogger("iss57-vde")
@@ -79,6 +79,11 @@ SYNC_COMMAND_URL = f"{BASE_URL}/api/v1/sendSyncCommand"
 BRIDGE_TYPES = {"BNC1", "BNCX"}
 EXTERNAL_UNIT_TYPE = "BNEU"
 UNLOCK_METHOD = "vde.Unlock"
+# The official app tags every API call with its vertical (app_type) and version.
+# Omitting these made the backend reject vde.Unlock with HTTP 403 code 13
+# "Device does not belong to the home" — it could not resolve the device under
+# an unknown app vertical. pybticino's working calls always send app_type=app_camera.
+APP_TYPE = "app_camera"
 
 
 def _select_home(account: AsyncAccount):
@@ -146,7 +151,13 @@ async def _send_unlock(
     module_body: dict = {"id": module_id, "payload": payload_b64, "configurationPhase": False}
     if bridge_id:
         module_body["bridge"] = bridge_id
-    body = {"home": {"id": home_id, "modules": [module_body]}}
+    # app_type / app_version sit as siblings of "home", exactly like every other
+    # Netatmo API call (the app appends them to all requests; pybticino does too).
+    body = {
+        "app_type": APP_TYPE,
+        "app_version": DEFAULT_APP_VERSION,
+        "home": {"id": home_id, "modules": [module_body]},
+    }
 
     lock_name = "SECONDARY (gate)" if secondary_lock else "PRIMARY (main entrance)"
     print("\n--- request ---")
@@ -159,6 +170,7 @@ async def _send_unlock(
 
     headers = {
         "Authorization": f"Bearer {token}",
+        "User-Agent": build_user_agent(),
         "Content-Type": "application/json; charset=utf-8",
     }
     async with aiohttp.ClientSession() as session:

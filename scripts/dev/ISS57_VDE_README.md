@@ -1,5 +1,21 @@
 # ISS-57 — `vde.Unlock` entrance test
 
+## Update (403 "Device does not belong to the home" fix)
+
+The first version of this script got `HTTP 403 { "code": 13, "message":
+"Device does not belong to the home" }` on every module — even the bridge.
+Root cause: the request was missing the `app_type` / `app_version` tags that the
+official app (and pybticino) attach to **every** API call. Without them the
+backend can't resolve the device under an app vertical, so it answers "does not
+belong to the home". This version now sends, as siblings of `home`:
+
+```json
+{"app_type": "app_camera", "app_version": "4.1.1.3", "home": { ... }}
+```
+
+plus the same `User-Agent: NetatmoApp(Security/...)` header pybticino uses.
+Please re-run with this updated script.
+
 ## What we found
 
 Your earlier test results were decisive: sending `setstate {"lock": false/true}`
