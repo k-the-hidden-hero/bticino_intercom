@@ -8,7 +8,11 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bticino_intercom.const import DOMAIN
 
-from .conftest import HOME_ID, HOME_NAME
+from .conftest import HOME_ID
+
+HOME_NAME = "BTicino Test"
+
+pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
 @pytest.fixture
@@ -38,11 +42,57 @@ def mock_token_store() -> MagicMock:
     return store
 
 
+def _make_default_patches(mock_token_store, mock_auth_override=None):
+    """Return context managers for all required patches."""
+    mock_account = AsyncMock()
+    mock_account.homes = {
+        HOME_ID: MagicMock(
+            id=HOME_ID,
+            name="Test Home",
+            raw_data={"name": "Test Home", "id": HOME_ID},
+            modules=[
+                MagicMock(
+                    id="00:03:50:d9:a6:3b",
+                    raw_data={
+                        "id": "00:03:50:d9:a6:3b",
+                        "type": "BNC1",
+                        "name": "Bridge",
+                        "firmware_name": "1.0",
+                        "reachable": True,
+                        "variant": "BNC1:bnc1_bridge",
+                    },
+                ),
+            ],
+        )
+    }
+    mock_account.async_update_topology = AsyncMock()
+    mock_account.async_get_home_status = AsyncMock(return_value={"body": {"home": {"modules": []}}})
+    mock_account.async_get_events = AsyncMock(return_value={"body": {"home": {"events": []}}})
+    mock_account.async_get_turn_servers = AsyncMock(return_value=[])
+
+    mock_ws = AsyncMock()
+    mock_ws.connect = AsyncMock()
+    mock_ws.disconnect = AsyncMock()
+    mock_ws.get_listener_task = MagicMock(return_value=None)
+
+    mock_signaling = AsyncMock()
+    mock_signaling.is_connected = False
+
+    patches = {
+        "account": patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        "ws": patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_ws),
+        "signaling": patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling),
+        "store": patch("custom_components.bticino_intercom.Store", return_value=mock_token_store),
+    }
+    if mock_auth_override:
+        patches["auth"] = patch("custom_components.bticino_intercom.AuthHandler", **mock_auth_override)
+
+    return patches
+
+
 async def test_tokens_saved_after_auth(
     hass: HomeAssistant,
     mock_config_entry_for_tokens: MockConfigEntry,
-    mock_account: AsyncMock,
-    mock_websocket_client: MagicMock,
     mock_token_store: MagicMock,
 ) -> None:
     """Verify that after setup, when AuthHandler authenticates, the token_callback saves tokens to Store."""
@@ -57,10 +107,10 @@ async def test_tokens_saved_after_auth(
         captured_callback = kwargs.get("token_callback")
         return mock_auth
 
-    with (
-        patch("custom_components.bticino_intercom.Store", return_value=mock_token_store),
-        patch("custom_components.bticino_intercom.AuthHandler", side_effect=auth_factory),
-    ):
+    patches = _make_default_patches(mock_token_store)
+    patches["auth"] = patch("custom_components.bticino_intercom.AuthHandler", side_effect=auth_factory)
+
+    with patches["auth"], patches["account"], patches["ws"], patches["signaling"], patches["store"]:
         mock_config_entry_for_tokens.add_to_hass(hass)
         assert await hass.config_entries.async_setup(mock_config_entry_for_tokens.entry_id)
         await hass.async_block_till_done()
@@ -83,8 +133,6 @@ async def test_tokens_saved_after_auth(
 async def test_tokens_restored_on_setup(
     hass: HomeAssistant,
     mock_config_entry_for_tokens: MockConfigEntry,
-    mock_account: AsyncMock,
-    mock_websocket_client: MagicMock,
     mock_token_store: MagicMock,
 ) -> None:
     """Verify that when Store has saved tokens, set_tokens is called on the AuthHandler before get_access_token."""
@@ -109,10 +157,10 @@ async def test_tokens_restored_on_setup(
 
     mock_auth.get_access_token = AsyncMock(side_effect=track_get_access_token)
 
-    with (
-        patch("custom_components.bticino_intercom.Store", return_value=mock_token_store),
-        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
-    ):
+    patches = _make_default_patches(mock_token_store)
+    patches["auth"] = patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth)
+
+    with patches["auth"], patches["account"], patches["ws"], patches["signaling"], patches["store"]:
         mock_config_entry_for_tokens.add_to_hass(hass)
         assert await hass.config_entries.async_setup(mock_config_entry_for_tokens.entry_id)
         await hass.async_block_till_done()
@@ -131,8 +179,6 @@ async def test_tokens_restored_on_setup(
 async def test_setup_works_without_saved_tokens(
     hass: HomeAssistant,
     mock_config_entry_for_tokens: MockConfigEntry,
-    mock_account: AsyncMock,
-    mock_websocket_client: MagicMock,
     mock_token_store: MagicMock,
 ) -> None:
     """Verify that first-time setup (no stored tokens) still works with full auth."""
@@ -144,10 +190,10 @@ async def test_setup_works_without_saved_tokens(
     mock_auth.close_session = AsyncMock()
     mock_auth.set_tokens = MagicMock()
 
-    with (
-        patch("custom_components.bticino_intercom.Store", return_value=mock_token_store),
-        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
-    ):
+    patches = _make_default_patches(mock_token_store)
+    patches["auth"] = patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth)
+
+    with patches["auth"], patches["account"], patches["ws"], patches["signaling"], patches["store"]:
         mock_config_entry_for_tokens.add_to_hass(hass)
         assert await hass.config_entries.async_setup(mock_config_entry_for_tokens.entry_id)
         await hass.async_block_till_done()
@@ -162,8 +208,6 @@ async def test_setup_works_without_saved_tokens(
 async def test_tokens_cleaned_on_remove(
     hass: HomeAssistant,
     mock_config_entry_for_tokens: MockConfigEntry,
-    mock_account: AsyncMock,
-    mock_websocket_client: MagicMock,
     mock_token_store: MagicMock,
 ) -> None:
     """Verify that async_remove_entry calls store.async_remove()."""
@@ -172,10 +216,10 @@ async def test_tokens_cleaned_on_remove(
     mock_auth.close_session = AsyncMock()
     mock_auth.set_tokens = MagicMock()
 
-    with (
-        patch("custom_components.bticino_intercom.Store", return_value=mock_token_store),
-        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth),
-    ):
+    patches = _make_default_patches(mock_token_store)
+    patches["auth"] = patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth)
+
+    with patches["auth"], patches["account"], patches["ws"], patches["signaling"], patches["store"]:
         mock_config_entry_for_tokens.add_to_hass(hass)
         assert await hass.config_entries.async_setup(mock_config_entry_for_tokens.entry_id)
         await hass.async_block_till_done()

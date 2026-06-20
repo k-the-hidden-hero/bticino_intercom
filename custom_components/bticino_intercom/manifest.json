@@ -1,13 +1,14 @@
 {
   "domain": "bticino_intercom",
   "name": "BTicino Classe 100X/300X",
+  "after_dependencies": ["media_source"],
   "codeowners": ["@k-the-hidden-hero"],
   "config_flow": true,
-  "dependencies": ["diagnostics"],
+  "dependencies": ["diagnostics", "http"],
   "documentation": "https://github.com/k-the-hidden-hero/bticino_intercom",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/k-the-hidden-hero/bticino_intercom/issues",
   "loggers": ["pybticino"],
   "requirements": ["pybticino>=1.8.2"],
-  "version": "1.9.7"
+  "version": "2.0.0"
 }

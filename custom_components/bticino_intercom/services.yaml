@@ -1,0 +1,10 @@
+reject_call:
+  name: Reject Call
+  description: Reject the active incoming call, terminating it for all devices.
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: The config entry to reject the call for. Defaults to the first entry.
+      required: false
+      selector:
+        text:

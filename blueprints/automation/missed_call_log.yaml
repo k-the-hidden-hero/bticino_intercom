@@ -1,0 +1,55 @@
+blueprint:
+  name: BTicino Missed Call Notification
+  description: >-
+    Sends a notification when a doorbell call is missed (nobody answered
+    within the timeout). Includes the snapshot from the call.
+  domain: automation
+  source_url: https://github.com/k-the-hidden-hero/bticino_intercom/blob/main/blueprints/automation/missed_call_log.yaml
+  input:
+    event_sensor:
+      name: Last Event Type Sensor
+      description: The sensor that tracks the last call event type.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: bticino_intercom
+    snapshot_camera:
+      name: Snapshot Camera
+      description: The camera entity that provides the doorbell snapshot.
+      selector:
+        entity:
+          filter:
+            - domain: camera
+              integration: bticino_intercom
+    notify_device:
+      name: Mobile Device
+      description: The mobile device to send the notification to.
+      selector:
+        device:
+          filter:
+            - integration: mobile_app
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input event_sensor
+    to: "missed_call"
+
+action:
+  - alias: "Send missed call notification with snapshot"
+    domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: "Missed Call"
+    message: "You missed a call at the door"
+    data:
+      image: /api/camera_proxy/{{ camera_entity }}
+      tag: bticino_missed_call
+      ttl: 0
+      priority: high
+
+variables:
+  camera_entity: !input snapshot_camera

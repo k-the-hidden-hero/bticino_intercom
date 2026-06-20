@@ -10,6 +10,7 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.LIGHT,
     Platform.CAMERA,
+    Platform.EVENT,
 ]
 
 
@@ -22,6 +23,8 @@ DEFAULT_NAME = "BTicino Classe 100X/300X"
 EVENT_TYPE_INCOMING_CALL = "incoming_call"
 EVENT_TYPE_ANSWERED_ELSEWHERE = "answered_elsewhere"
 EVENT_TYPE_TERMINATED = "terminated"
+EVENT_TYPE_MISSED_CALL = "missed_call"
+EVENT_TYPE_ACCEPTED_CALL = "accepted_call"
 
 # Module Types (Based on Variant Subtype)
 SUBTYPE_DOORLOCK = "bndl_doorlock"
@@ -47,6 +50,11 @@ SIGNAL_CALL_RECEIVED = f"{DOMAIN}_call_received"
 EVENT_LOGBOOK_INCOMING_CALL = f"{DOMAIN}_incoming_call"
 EVENT_LOGBOOK_ANSWERED_ELSEWHERE = f"{DOMAIN}_answered_elsewhere"
 EVENT_LOGBOOK_TERMINATED = f"{DOMAIN}_terminated"
+EVENT_LOGBOOK_MISSED_CALL = f"{DOMAIN}_missed_call"
+EVENT_LOGBOOK_ACCEPTED_CALL = f"{DOMAIN}_accepted_call"
+
+# Frontend / automation event
+EVENT_CALL = f"{DOMAIN}_call"
 
 # Data keys for coordinator
 DATA_LAST_EVENT = "last_event"
@@ -72,3 +80,19 @@ IMAGE_CACHE_SECONDS = 300  # 5 minutes
 CALL_RETRANSMIT_WINDOW = 15
 # Absolute cap on session duration, last safety net.
 CALL_SESSION_MAX_DURATION = 180
+# Window during which a session_id is remembered as "recently closed",
+# so duplicate terminate/rescind RTC events (Netatmo push retransmits
+# to multiple receivers) don't trigger redundant API refreshes. Fixes #56.
+CLOSED_SESSION_DEDUP_WINDOW = 60  # seconds
+
+# --- Event history ---
+HISTORY_STORAGE_VERSION = 1
+HISTORY_DEFAULT_RETENTION_DAYS = 30
+HISTORY_DEFAULT_MAX_EVENTS = 500
+HISTORY_MAX_RETENTION_DAYS = 365
+HISTORY_MAX_MAX_EVENTS = 5000
+
+# Option keys (kept as plain strings to avoid breaking existing entries)
+OPT_HISTORY_ENABLED = "history_enabled"
+OPT_HISTORY_RETENTION_DAYS = "history_retention_days"
+OPT_HISTORY_MAX_EVENTS = "history_max_events"

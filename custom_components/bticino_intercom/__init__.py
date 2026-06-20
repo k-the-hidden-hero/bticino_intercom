@@ -20,6 +20,7 @@ from homeassistant.const import (
 from homeassistant.core import (
     CoreState,  # Re-add CoreState for check
     HomeAssistant,
+    ServiceCall,
 )
 from homeassistant.core import (
     Event as HAEvent,  # Re-add HAEvent type hint
@@ -27,7 +28,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
-from pybticino import AsyncAccount, AuthHandler, WebsocketClient
+from pybticino import AsyncAccount, AuthHandler, SignalingClient, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
 from .const import (
@@ -35,6 +36,8 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import BticinoIntercomCoordinator
+from .history import EventHistoryStore, get_history_options
+from .media_source import BticinoHistoryImageView
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,9 +47,23 @@ RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
 TOKEN_RESUBSCRIBE_INTERVAL = 3600  # Re-subscribe with fresh token every hour
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
+SIGNALING_CLIENT_KEY = "signaling_client"
+ACCOUNT_KEY = "account"
 COORDINATOR_KEY = "coordinator"
 START_LISTENER_REMOVE_KEY = "start_listener_remove"
+HISTORY_KEY = "history"
+HISTORY_VIEW_FLAG = f"{DOMAIN}_history_view_registered"
 TOKEN_STORAGE_VERSION = 1
+
+
+async def _deferred_start_websocket(hass, entry, start_fn):
+    """Wait for the config entry to finish loading, then start the WebSocket manager."""
+    for _ in range(30):
+        if entry.state == config_entries.ConfigEntryState.LOADED:
+            await start_fn()
+            return
+        await asyncio.sleep(1)
+    _LOGGER.error("Entry never reached LOADED state, WebSocket manager not started")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -94,8 +111,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     account = AsyncAccount(auth_handler)
 
-    # Create the coordinator first, so we can pass its message handler
-    coordinator = BticinoIntercomCoordinator(hass, entry, account, None)  # Pass None for websocket initially
+    # Create the signaling client for WebRTC (lazy-connected on first use)
+    signaling_client = SignalingClient(auth_handler=auth_handler)
+
+    # Create the coordinator, passing signaling_client so it can wire
+    # push-offer sessions for answer-mode WebRTC
+    coordinator = BticinoIntercomCoordinator(
+        hass, entry, account, None, signaling_client=signaling_client
+    )  # Pass None for websocket initially
 
     # Now create the websocket client, passing the coordinator's handler
     # Ensure the callback method exists on the coordinator instance
@@ -104,16 +127,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         message_callback=coordinator._handle_websocket_message,
         # Pass app_version etc. if needed/customized
     )
-    # Assign the created client back to the coordinator (already done in coordinator __init__?)
-    # Let's keep it explicit here for clarity, assuming coordinator might not always get it in init
     coordinator.websocket_client = websocket_client
 
-    # Store coordinator and websocket client in hass.data
+    # Prepare event history store (images + metadata on disk).
+    history_enabled, retention_days, max_events = get_history_options(entry.options)
+    history_store: EventHistoryStore | None = None
+    if history_enabled:
+        history_store = EventHistoryStore(hass, entry.entry_id)
+        await history_store.async_load()
+        await history_store.async_apply_retention(
+            retention_days=retention_days,
+            max_events=max_events,
+        )
+        coordinator.history = history_store
+
+    # Store everything in hass.data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         COORDINATOR_KEY: coordinator,
         WEBSOCKET_CLIENT_KEY: websocket_client,
-        # WEBSOCKET_TASK_KEY will be added later
+        SIGNALING_CLIENT_KEY: signaling_client,
+        ACCOUNT_KEY: account,
+        HISTORY_KEY: history_store,
     }
+
+    # Register the HTTP view once per HA instance.
+    if not hass.data.get(HISTORY_VIEW_FLAG):
+        hass.http.register_view(BticinoHistoryImageView())
+        hass.data[HISTORY_VIEW_FLAG] = True
 
     # Fetch initial data using the coordinator's standard method
     try:
@@ -134,6 +174,69 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Add the update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
+    # Register debug service when integration logger is at DEBUG level.
+    # Protected by HA authentication — requires a valid access token.
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        import time as _time
+
+        async def _inject_test_event(call) -> None:
+            device_id = call.data.get("device_id") or next(iter(coordinator.data.get("modules", {})), None)
+            if not device_id:
+                _LOGGER.warning("inject_test_event: no modules available")
+                return
+            fake_msg = {
+                "push_type": "BNC1-incoming_call",
+                "extra_params": {
+                    "event_type": "incoming_call",
+                    "device_id": device_id,
+                    "session_id": call.data.get("session_id", f"test-{int(_time.time())}"),
+                    "snapshot_url": call.data.get("snapshot_url", "https://picsum.photos/640/480"),
+                    "vignette_url": call.data.get("vignette_url", "https://picsum.photos/160/120"),
+                },
+            }
+            _LOGGER.debug("Injecting test event: %s", fake_msg)
+            await coordinator._handle_websocket_message(fake_msg)
+
+        hass.services.async_register(DOMAIN, "inject_test_event", _inject_test_event)
+        _LOGGER.debug("Debug service 'inject_test_event' registered (logger at DEBUG)")
+
+    # --- Register reject_call service ---
+    async def _async_reject_call(call: ServiceCall) -> None:
+        """Reject the active incoming call."""
+        entry_id = call.data.get("entry_id")
+        if not entry_id:
+            entry_id = next(iter(hass.data.get(DOMAIN, {})), None)
+        if not entry_id or entry_id not in hass.data.get(DOMAIN, {}):
+            _LOGGER.warning("reject_call: no valid entry_id found")
+            return
+        entry_data = hass.data[DOMAIN][entry_id]
+        coord = entry_data[COORDINATOR_KEY]
+        sig = entry_data[SIGNALING_CLIENT_KEY]
+
+        if not coord.active_call:
+            _LOGGER.debug("reject_call: no active call to reject")
+            return
+
+        module_id = coord.active_call.get("module_id")
+        try:
+            await sig.send_terminate()
+        except Exception:
+            _LOGGER.exception("reject_call: failed to send terminate")
+            return
+        coord._fire_call_event("end", module_id, reason="rejected")
+        coord._active_call = None
+
+    hass.services.async_register(DOMAIN, "reject_call", _async_reject_call)
+
+    # Register static files for blueprint sound
+    from pathlib import Path
+
+    from homeassistant.components.http import StaticPathConfig
+
+    www_path = Path(__file__).parent / "www"
+    if www_path.is_dir():
+        await hass.http.async_register_static_paths([StaticPathConfig(f"/{DOMAIN}", str(www_path), True)])
+
     # --- Define WebSocket Connection Manager Task and Start Logic ---
     async def _websocket_connection_manager() -> None:
         """Manage the WebSocket connection and reconnection."""
@@ -143,7 +246,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         attempt = 0  # Retry counter, resets on successful connection
         # Outer try block to catch unexpected errors in the loop structure itself
         try:
-            while hass.is_running and entry.state == config_entries.ConfigEntryState.LOADED:
+            while hass.is_running:
                 _LOGGER.debug(
                     "WebSocket manager loop iteration start. hass.is_running=%s, entry.state=%s",
                     hass.is_running,
@@ -296,14 +399,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Store task in the existing entry_data dictionary
         entry_data[WEBSOCKET_TASK_KEY] = connection_task
 
-    # Schedule the WebSocket start after HA starts
+    # Schedule the WebSocket start — always deferred to avoid running during setup
     if hass.state == CoreState.running:
-        # HA is already running, start WS manager task immediately
-        _LOGGER.debug("Home Assistant already running, starting WebSocket manager directly.")
-        await _async_start_websocket_manager()
-        start_listener_remove = None  # No listener needed
+        _LOGGER.debug("Home Assistant already running, scheduling WebSocket manager via call_later.")
+        entry.async_on_unload(
+            hass.async_create_task(
+                _deferred_start_websocket(hass, entry, _async_start_websocket_manager),
+                f"{DOMAIN} deferred WS start - {entry.entry_id}",
+            ).cancel
+        )
+        start_listener_remove = None
     else:
-        # HA is starting, listen for the start event
         _LOGGER.debug("Home Assistant starting, scheduling WebSocket manager via listener.")
         start_listener_remove = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _async_start_websocket_manager)
 
@@ -343,6 +449,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Clean up websocket client (disconnect is handled by task cancellation finally)
         entry_data.pop(WEBSOCKET_CLIENT_KEY, None)
 
+        # Clean up signaling client
+        signaling = entry_data.pop(SIGNALING_CLIENT_KEY, None)
+        if signaling and signaling.is_connected:
+            await signaling.disconnect()
+
+        entry_data.pop(ACCOUNT_KEY, None)
+
         # Clean up start listener if it exists
         start_listener_remove = entry_data.pop(START_LISTENER_REMOVE_KEY, None)
         if start_listener_remove:
@@ -359,7 +472,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Clean up hass.data[DOMAIN][entry.entry_id] only if unload succeeded
     if unload_ok and DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        removed = hass.data[DOMAIN].pop(entry.entry_id)
+        history_store: EventHistoryStore | None = removed.get(HISTORY_KEY)
+        if history_store is not None:
+            await history_store.async_unload()
         _LOGGER.debug("Removed entry data for %s from hass.data", entry.entry_id)
         # If this was the last entry, remove the domain key
         if not hass.data[DOMAIN]:
@@ -377,7 +493,10 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Clean up stored tokens when an entry is permanently removed."""
+    """Clean up stored tokens and history when an entry is permanently removed."""
     token_store = Store(hass, TOKEN_STORAGE_VERSION, f"{DOMAIN}.tokens.{entry.entry_id}")
     await token_store.async_remove()
-    _LOGGER.debug("Removed stored tokens for entry %s", entry.entry_id)
+    history_store = EventHistoryStore(hass, entry.entry_id)
+    await history_store.async_load()
+    await history_store.async_clear()
+    _LOGGER.debug("Removed stored tokens and history for entry %s", entry.entry_id)

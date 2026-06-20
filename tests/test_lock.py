@@ -73,6 +73,69 @@ async def test_lock_unlock_service(
     )
 
 
+async def test_lock_open_service(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+    mock_account: AsyncMock,
+) -> None:
+    """Test the open service performs a momentary unlatch (lock=False).
+
+    The entity advertises LockEntityFeature.OPEN, so lock.open must be
+    implemented; otherwise HA raises NotImplementedError (HTTP 500).
+    """
+    entity_id = next(s for s in hass.states.async_entity_ids(LOCK_DOMAIN) if "light_as_lock" not in s)
+
+    await hass.services.async_call(
+        LOCK_DOMAIN,
+        "open",
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state.state == LockState.UNLOCKED
+
+    mock_account.async_set_module_state.assert_called_once_with(
+        home_id=mock_setup_entry.data["home_id"],
+        module_id=LOCK_MODULE_ID,
+        bridge_id=BRIDGE_MAC,
+        state={"lock": False},
+        timezone=hass.config.time_zone,
+    )
+
+
+async def test_light_as_lock_open_sends_on(
+    hass: HomeAssistant,
+    mock_setup_entry_light_as_lock: MockConfigEntry,
+    mock_account: AsyncMock,
+) -> None:
+    """Test the open service on light_as_lock sends on=True (no HTTP 500)."""
+    all_locks = hass.states.async_entity_ids(LOCK_DOMAIN)
+    light_lock_entities = [s for s in all_locks if "luci" in s or "scale" in s]
+    assert len(light_lock_entities) == 1
+    entity_id = light_lock_entities[0]
+
+    await hass.services.async_call(
+        LOCK_DOMAIN,
+        "open",
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state.state == LockState.UNLOCKED
+
+    mock_account.async_set_module_state.assert_called_once_with(
+        home_id=mock_setup_entry_light_as_lock.data["home_id"],
+        module_id=LIGHT_MODULE_ID,
+        bridge_id=BRIDGE_MAC,
+        state={"on": True},
+        timezone=hass.config.time_zone,
+    )
+
+
 async def test_lock_lock_service(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
@@ -191,8 +254,8 @@ async def test_light_as_lock_unlock_sends_on(
     """Test unlocking light_as_lock sends on=True to the API."""
     # With light_as_lock, there are 2 lock entities. Find the one for the light module.
     all_locks = hass.states.async_entity_ids(LOCK_DOMAIN)
-    # The light_as_lock entity has "staircase_light" in its entity_id (from module name)
-    light_lock_entities = [s for s in all_locks if "staircase" in s or "light" in s.lower()]
+    # The light_as_lock entity has "luci_scale" in its entity_id (from module name)
+    light_lock_entities = [s for s in all_locks if "luci" in s or "scale" in s]
     assert len(light_lock_entities) == 1
     entity_id = light_lock_entities[0]
 

@@ -2,12 +2,15 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pybticino.exceptions import ApiError, AuthError
 
 from custom_components.bticino_intercom.const import DOMAIN
+
+pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
 async def test_user_step_shows_form(hass: HomeAssistant) -> None:

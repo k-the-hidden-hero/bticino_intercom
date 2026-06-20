@@ -1,0 +1,103 @@
+blueprint:
+  name: BTicino Auto-Open Door on Schedule
+  description: >-
+    Automatically opens the door when the doorbell rings during a specified
+    time window. Useful for expected deliveries or regular visitors.
+    Optionally sends a notification when the door is auto-opened.
+  domain: automation
+  source_url: https://github.com/k-the-hidden-hero/bticino_intercom/blob/main/blueprints/automation/doorbell_auto_open.yaml
+  input:
+    call_sensor:
+      name: Doorbell Call Sensor
+      description: The binary sensor that turns on when the doorbell rings.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              integration: bticino_intercom
+    door_lock:
+      name: Door Lock
+      description: The lock entity to open automatically.
+      selector:
+        entity:
+          filter:
+            - domain: lock
+              integration: bticino_intercom
+    time_start:
+      name: Start Time
+      description: Auto-open is active from this time.
+      default: "08:00:00"
+      selector:
+        time:
+    time_end:
+      name: End Time
+      description: Auto-open is active until this time.
+      default: "18:00:00"
+      selector:
+        time:
+    open_delay:
+      name: Delay Before Opening (seconds)
+      description: >-
+        Wait this many seconds before opening. Set to 0 for immediate.
+        A short delay lets the person know their ring was acknowledged.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 10
+          unit_of_measurement: seconds
+    send_notification:
+      name: Send Notification
+      description: Send a notification when the door is auto-opened.
+      default: true
+      selector:
+        boolean:
+    notify_device:
+      name: Mobile Device (optional)
+      description: The mobile device to notify. Only used if "Send Notification" is enabled.
+      default: ""
+      selector:
+        device:
+          filter:
+            - integration: mobile_app
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input call_sensor
+    to: "on"
+
+condition:
+  - condition: time
+    after: !input time_start
+    before: !input time_end
+
+action:
+  - alias: "Wait before opening"
+    delay:
+      seconds: !input open_delay
+
+  - alias: "Open the door"
+    service: lock.unlock
+    target:
+      entity_id: !input door_lock
+
+  - alias: "Notify if enabled"
+    if:
+      - condition: template
+        value_template: "{{ send_notification }}"
+    then:
+      - domain: mobile_app
+        type: notify
+        device_id: !input notify_device
+        title: "Door Auto-Opened"
+        message: "The door was automatically opened (scheduled auto-open)"
+        data:
+          tag: bticino_auto_open
+          ttl: 0
+          priority: high
+
+variables:
+  send_notification: !input send_notification

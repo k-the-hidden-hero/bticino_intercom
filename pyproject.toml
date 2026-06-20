@@ -25,6 +25,9 @@ ignore = [
     "E501",   # line too long (formatter handles it)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["T20"]  # interactive scripts may use print
+
 [tool.ruff.lint.isort]
 known-first-party = ["custom_components.bticino_intercom"]
 

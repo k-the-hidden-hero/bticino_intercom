@@ -1,0 +1,15 @@
+services:
+  homeassistant:
+    container_name: ha-dev
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # HA config directory (persistent, git-ignored)
+      - ./ha-dev-config:/config
+      # Mount custom component (live reload on HA restart)
+      - ./custom_components/bticino_intercom:/config/custom_components/bticino_intercom:ro
+      # Mount pybticino source for development
+      - /home/koma/src/pybticino:/pybticino:ro
+    environment:
+      - TZ=Europe/Rome

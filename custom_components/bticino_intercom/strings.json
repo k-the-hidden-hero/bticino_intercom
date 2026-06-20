@@ -38,10 +38,13 @@
   "options": {
     "step": {
       "init": {
-        "title": "BTicino Light Options",
-        "description": "Configure how your BTicino lights behave",
+        "title": "BTicino Options",
+        "description": "Configure how your BTicino integration behaves",
         "data": {
-          "light_as_lock": "Use light relay as door lock (Spanish installation method)"
+          "light_as_lock": "Use light relay as door lock (Spanish installation method)",
+          "history_enabled": "Save call history (snapshots + vignettes on disk)",
+          "history_retention_days": "Retention period",
+          "history_max_events": "Maximum number of stored events"
         }
       }
     },

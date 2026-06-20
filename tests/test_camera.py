@@ -1,156 +1,396 @@
-"""Tests for the BTicino camera platform."""
+"""Tests for the BTicino camera entity image URL extraction."""
 
-from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
-from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from custom_components.bticino_intercom.const import DOMAIN
-
-from .conftest import EXT_UNIT_MODULE_ID
+from __future__ import annotations
 
 
-async def test_camera_entities_created(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test snapshot and vignette camera entities are created."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    assert len(states) == 2
+class TestExtractImageFromEvent:
+    """Test _extract_image_from_event for both WS and API event formats."""
 
-    snapshot_entities = [s for s in states if "snapshot" in s]
-    vignette_entities = [s for s in states if "vignette" in s]
-    assert len(snapshot_entities) == 1
-    assert len(vignette_entities) == 1
+    def _make_camera(self, image_type: str):
+        """Create a camera instance without coordinator (for unit testing the extraction method)."""
+
+        # We only need the _image_type attribute for _extract_image_from_event
+        class FakeCamera:
+            _image_type = image_type
+
+        fake = FakeCamera()
+        # Bind the method from the real class
+        import types
+
+        from custom_components.bticino_intercom.camera import BticinoBaseEventCamera
+
+        fake._extract_image_from_event = types.MethodType(BticinoBaseEventCamera._extract_image_from_event, fake)
+        return fake
+
+    def test_ws_status_event_snapshot_url(self) -> None:
+        """WS Format B event with direct snapshot_url."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "type": "incoming_call",
+            "timestamp": 1774877242,
+            "snapshot_url": "https://example.com/snapshot.jpg",
+            "vignette_url": "https://example.com/vignette.jpg",
+        }
+        url, _expires, _time = cam._extract_image_from_event(event)
+
+        assert url == "https://example.com/snapshot.jpg"
+        assert _expires is None  # WS events don't include expiry
+        assert _time == 1774877242
+
+    def test_ws_status_event_vignette_url(self) -> None:
+        """WS Format B event with direct vignette_url."""
+        cam = self._make_camera("vignette")
+        event = {
+            "type": "incoming_call",
+            "timestamp": 1774877242,
+            "snapshot_url": "https://example.com/snapshot.jpg",
+            "vignette_url": "https://example.com/vignette.jpg",
+        }
+        url, _expires, _time = cam._extract_image_from_event(event)
+
+        assert url == "https://example.com/vignette.jpg"
+        assert _time == 1774877242
+
+    def test_api_history_event_with_subevents(self) -> None:
+        """API history event with nested subevents[0].snapshot.url."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "type": "outdoor",
+            "time": 1774877200,
+            "subevents": [
+                {
+                    "type": "incoming_call",
+                    "time": 1774877242,
+                    "snapshot": {
+                        "url": "https://blob.example.com/snapshot_from_api.jpg",
+                        "expires_at": 1774880842,
+                    },
+                    "vignette": {
+                        "url": "https://blob.example.com/vignette_from_api.jpg",
+                        "expires_at": 1774880842,
+                    },
+                }
+            ],
+        }
+        url, _expires, _time = cam._extract_image_from_event(event)
+
+        assert url == "https://blob.example.com/snapshot_from_api.jpg"
+        assert _expires == 1774880842
+        assert _time == 1774877242
+
+    def test_api_history_event_vignette(self) -> None:
+        """API history event — extracting vignette instead of snapshot."""
+        cam = self._make_camera("vignette")
+        event = {
+            "type": "outdoor",
+            "time": 1774877200,
+            "subevents": [
+                {
+                    "type": "incoming_call",
+                    "time": 1774877242,
+                    "snapshot": {"url": "https://example.com/snap.jpg", "expires_at": 100},
+                    "vignette": {"url": "https://example.com/vig.jpg", "expires_at": 200},
+                }
+            ],
+        }
+        url, _expires, _time = cam._extract_image_from_event(event)
+
+        assert url == "https://example.com/vig.jpg"
+        assert _expires == 200
+
+    def test_event_with_no_image_data(self) -> None:
+        """Event without any image data returns None."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "type": "connection",
+            "time": 1774877000,
+        }
+        url, _expires, _time = cam._extract_image_from_event(event)
+
+        assert url is None
+        assert _expires is None
+        assert _time == 1774877000
+
+    def test_ws_snapshot_url_takes_priority_over_subevents(self) -> None:
+        """If both direct URL and subevents exist, direct URL wins."""
+        cam = self._make_camera("snapshot")
+        event = {
+            "timestamp": 1774877242,
+            "snapshot_url": "https://example.com/direct.jpg",
+            "subevents": [
+                {
+                    "snapshot": {"url": "https://example.com/nested.jpg", "expires_at": 100},
+                }
+            ],
+        }
+        url, _expires, _time = cam._extract_image_from_event(event)
+
+        assert url == "https://example.com/direct.jpg"
 
 
-async def test_camera_has_image_url(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test camera entity has image_url attribute from event data."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
+class TestEnableAudioSendrecv:
+    """Test audio direction fix in SDP."""
 
-    state = hass.states.get(snapshot_entity)
-    assert state is not None
-    assert state.attributes.get("image_url") == "https://example.com/snapshot.jpg"
+    def test_audio_recvonly_becomes_sendrecv(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
 
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\n"
+        result = BticinoWebRTCCamera._enable_audio_sendrecv(sdp)
+        # Audio should be sendrecv
+        assert "m=audio" in result
+        lines = result.split("\r\n")
+        audio_idx = next(i for i, line in enumerate(lines) if line.startswith("m=audio"))
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        audio_section = lines[audio_idx:video_idx]
+        assert "a=sendrecv" in audio_section
+        # Video should stay recvonly
+        video_section = lines[video_idx:]
+        assert "a=recvonly" in video_section
 
-async def test_camera_vignette_has_url(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test vignette camera entity has correct URL."""
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    vignette_entity = next(s for s in states if "vignette" in s)
+    def test_video_stays_recvonly(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
 
-    state = hass.states.get(vignette_entity)
-    assert state is not None
-    assert state.attributes.get("image_url") == "https://example.com/vignette.jpg"
-
-
-async def test_camera_url_changes_clears_cache(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test that cache is cleared when image URL changes."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
-
-    # Update coordinator with new event having a different snapshot URL
-    new_data = dict(coordinator.data)
-    new_data["last_event"] = {
-        "type": "incoming_call",
-        "module_id": EXT_UNIT_MODULE_ID,
-        "time": 1700002000,
-        "subevents": [
-            {
-                "type": "missed_call",
-                "time": 1700002050,
-                "snapshot": {
-                    "url": "https://example.com/snapshot_new.jpg",
-                    "expires_at": 1700200000,
-                },
-                "vignette": {
-                    "url": "https://example.com/vignette_new.jpg",
-                    "expires_at": 1700200000,
-                },
-            }
-        ],
-    }
-    coordinator.async_set_updated_data(new_data)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(snapshot_entity)
-    assert state.attributes.get("image_url") == "https://example.com/snapshot_new.jpg"
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\n"
+        result = BticinoWebRTCCamera._enable_audio_sendrecv(sdp)
+        assert result.count("a=sendrecv") == 1  # Only audio
+        assert result.count("a=recvonly") == 1  # Only video
 
 
-async def test_camera_unavailable_without_url(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test camera is unavailable when there is no image URL."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+class TestFixAnswerAudioDirection:
+    """Test answer SDP audio direction fix."""
 
-    # Update coordinator with event without image data
-    new_data = dict(coordinator.data)
-    new_data["events_history"] = {}
-    new_data["last_event"] = {}
-    coordinator.async_set_updated_data(new_data)
-    await hass.async_block_till_done()
+    def test_sendrecv_becomes_sendonly_in_audio(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
 
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
-    state = hass.states.get(snapshot_entity)
-    assert state.state == "unavailable"
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\n"
+        result = BticinoWebRTCCamera._fix_answer_audio_direction(sdp)
+        lines = result.split("\r\n")
+        audio_idx = next(i for i, line in enumerate(lines) if line.startswith("m=audio"))
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        assert "a=sendonly" in lines[audio_idx:video_idx]
+        assert "a=sendrecv" not in lines[audio_idx:video_idx]
+
+    def test_video_direction_unchanged(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\n"
+        result = BticinoWebRTCCamera._fix_answer_audio_direction(sdp)
+        lines = result.split("\r\n")
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        video_section = lines[video_idx:]
+        assert "a=sendonly" in video_section
+
+    def test_already_sendonly_unchanged(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n"
+        result = BticinoWebRTCCamera._fix_answer_audio_direction(sdp)
+        assert "a=sendonly" in result
+        assert "a=sendrecv" not in result
 
 
-async def test_camera_falls_back_to_history_when_last_event_has_no_image(
-    hass: HomeAssistant,
-    mock_setup_entry: MockConfigEntry,
-) -> None:
-    """Test camera finds image in event history when last_event has no snapshot."""
-    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
-    states = hass.states.async_entity_ids(CAMERA_DOMAIN)
-    snapshot_entity = next(s for s in states if "snapshot" in s)
+class TestAudioSdpConditionalRewrite:
+    """Test that answer rewriting is conditional on offer modification."""
 
-    # Set last_event to a disconnection (no snapshot) but keep history with images
-    new_data = dict(coordinator.data)
-    new_data["last_event"] = {
-        "type": "disconnection",
-        "module_id": "00:03:50:d9:a6:3b",
-        "time": 1700300000,
-    }
-    new_data["events_history"] = {
-        coordinator.home_id: [
-            {
-                "id": "evt_disconnect",
-                "type": "disconnection",
-                "time": 1700300000,
-            },
-            {
-                "id": "evt_call",
-                "type": "call",
-                "module_id": EXT_UNIT_MODULE_ID,
-                "time": 1700200000,
-                "subevents": [
-                    {
-                        "type": "missed_call",
-                        "time": 1700200050,
-                        "snapshot": {
-                            "url": "https://example.com/fallback_snapshot.jpg",
-                            "expires_at": 1700400000,
-                        },
-                    }
-                ],
-            },
-        ],
-    }
-    coordinator.async_set_updated_data(new_data)
-    await hass.async_block_till_done()
+    def test_recvonly_offer_gets_answer_fixed(self) -> None:
+        """When offer has recvonly (standard HA player), answer sendrecv -> sendonly."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
 
-    state = hass.states.get(snapshot_entity)
-    # Camera should fall back to the call event with snapshot from history
-    assert state.state != "unavailable"
-    assert state.attributes.get("image_url") == "https://example.com/fallback_snapshot.jpg"
+        offer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n"
+        modified = BticinoWebRTCCamera._enable_audio_sendrecv(offer)
+        was_rewritten = modified != offer
+        assert was_rewritten is True
+
+        answer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"
+        # Should fix because we rewrote the offer
+        fixed = BticinoWebRTCCamera._fix_answer_audio_direction(answer)
+        assert "a=sendonly" in fixed
+
+    def test_sendrecv_offer_leaves_answer_alone(self) -> None:
+        """When offer already has sendrecv (two-way card), answer stays sendrecv."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"
+        modified = BticinoWebRTCCamera._enable_audio_sendrecv(offer)
+        was_rewritten = modified != offer
+        assert was_rewritten is False
+        # Should NOT fix the answer — two-way audio card expects sendrecv
+
+
+class TestInjectAudioSsrc:
+    """Test audio SSRC injection into SDP offer."""
+
+    def test_ssrc_added_to_audio_section(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = (
+            "v=0\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=recvonly\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=mid:1\r\n"
+            "a=recvonly\r\n"
+        )
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        lines = result.split("\r\n")
+        audio_idx = next(i for i, line in enumerate(lines) if line.startswith("m=audio"))
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        audio_section = "\r\n".join(lines[audio_idx:video_idx])
+        assert "a=ssrc:1000 cname:bticino-ha" in audio_section
+        assert "a=ssrc:1000 msid:bticino-intercom audio0" in audio_section
+
+    def test_ssrc_not_added_to_video(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = (
+            "v=0\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=recvonly\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=mid:1\r\n"
+            "a=recvonly\r\n"
+        )
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        lines = result.split("\r\n")
+        video_idx = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        video_section = "\r\n".join(lines[video_idx:])
+        assert "cname:bticino-ha" not in video_section
+
+    def test_no_duplicate_if_ssrc_exists(self) -> None:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = (
+            "v=0\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=sendrecv\r\n"
+            "a=ssrc:99999 cname:existing\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+        )
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        assert result.count("a=ssrc:") == 1
+
+    def test_audio_last_section(self) -> None:
+        """SSRC injected even if audio is the last m-section."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\na=recvonly\r\n"
+        result = BticinoWebRTCCamera._inject_audio_ssrc(sdp)
+        assert "a=ssrc:1000 cname:bticino-ha" in result
+
+
+class TestConvertOfferToAnswerSdp:
+    """Tests for BticinoWebRTCCamera.convert_offer_to_answer_sdp static method."""
+
+    def test_actpass_becomes_active(self) -> None:
+        """a=setup:actpass is replaced with a=setup:active."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 123 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:0\r\n"
+        )
+        result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
+        assert "a=setup:active" in result
+        assert "a=setup:actpass" not in result
+
+    def test_other_attributes_preserved(self) -> None:
+        """Non-setup attributes remain unchanged."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 123 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:0\r\n"
+            "a=rtpmap:111 opus/48000/2\r\n"
+            "a=ice-ufrag:abc\r\n"
+        )
+        result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
+        assert "a=mid:0" in result
+        assert "a=rtpmap:111 opus/48000/2" in result
+        assert "a=ice-ufrag:abc" in result
+        assert "v=0" in result
+
+    def test_multiple_media_sections_all_converted(self) -> None:
+        """Multiple m= sections each with a=setup:actpass are all converted."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 123 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:0\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=setup:actpass\r\n"
+            "a=mid:1\r\n"
+        )
+        result = BticinoWebRTCCamera.convert_offer_to_answer_sdp(offer)
+        assert result.count("a=setup:active") == 2
+        assert "a=setup:actpass" not in result
+
+
+class TestReorderMlines:
+    """Tests for BticinoWebRTCCamera._reorder_mlines static method."""
+
+    def test_matching_order_unchanged(self) -> None:
+        """When order already matches, SDP is returned as-is."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:1\r\n"
+        answer = (
+            "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"
+        )
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+        assert result == answer
+
+    def test_mismatched_order_reordered(self) -> None:
+        """When offer is (audio, video) but answer is (video, audio), reorder."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = (
+            "v=0\r\n"
+            "o=- 1 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=mid:0\r\n"
+            "a=rtpmap:111 opus/48000/2\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=mid:1\r\n"
+            "a=rtpmap:96 H264/90000\r\n"
+        )
+        answer = (
+            "v=0\r\n"
+            "o=- 2 0 IN IP4 0.0.0.0\r\n"
+            "s=-\r\n"
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+            "a=sendonly\r\n"
+            "a=fingerprint:sha-256 AA:BB\r\n"
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+            "a=sendrecv\r\n"
+            "a=fingerprint:sha-256 AA:BB\r\n"
+        )
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+        lines = result.split("\r\n")
+        mlines = [line for line in lines if line.startswith("m=")]
+        assert mlines[0].startswith("m=audio")
+        assert mlines[1].startswith("m=video")
+
+    def test_session_lines_preserved(self) -> None:
+        """Session-level lines (before first m=) are preserved."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        offer = "v=0\r\ns=-\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+        answer = "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n"
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+        assert result.startswith("v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\n")

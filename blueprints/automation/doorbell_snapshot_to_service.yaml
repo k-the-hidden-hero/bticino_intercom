@@ -1,0 +1,87 @@
+blueprint:
+  name: BTicino Doorbell Snapshot to External Service
+  description: >-
+    When the doorbell rings, downloads the snapshot and sends it to an external
+    service via a REST command or fires an event with the image path.
+    Useful for face recognition, logging, or custom processing.
+  domain: automation
+  source_url: https://github.com/k-the-hidden-hero/bticino_intercom/blob/main/blueprints/automation/doorbell_snapshot_to_service.yaml
+  input:
+    call_sensor:
+      name: Doorbell Call Sensor
+      description: The binary sensor that turns on when the doorbell rings.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              integration: bticino_intercom
+    snapshot_camera:
+      name: Snapshot Camera
+      description: The camera entity that provides the doorbell snapshot.
+      selector:
+        entity:
+          filter:
+            - domain: camera
+              integration: bticino_intercom
+    snapshot_path:
+      name: Snapshot Save Path
+      description: >-
+        Where to save the snapshot file. Must be within HA's allowlisted
+        directories (e.g., /config/www/doorbell/).
+      default: "/config/www/doorbell/last_ring.jpg"
+      selector:
+        text:
+    fire_event:
+      name: Fire Event After Snapshot
+      description: >-
+        Fire a 'bticino_doorbell_snapshot' event with the file path.
+        Other automations or AppDaemon scripts can listen for this event.
+      default: true
+      selector:
+        boolean:
+    additional_actions:
+      name: Additional Actions (optional)
+      description: >-
+        Extra actions to run after the snapshot is saved (e.g., call a
+        rest_command for face recognition, send to a webhook, etc.).
+      default: []
+      selector:
+        action:
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input call_sensor
+    to: "on"
+
+action:
+  - alias: "Save camera snapshot to file"
+    service: camera.snapshot
+    target:
+      entity_id: !input snapshot_camera
+    data:
+      filename: !input snapshot_path
+
+  - alias: "Fire event if enabled"
+    if:
+      - condition: template
+        value_template: "{{ fire_event }}"
+    then:
+      - event: bticino_doorbell_snapshot
+        event_data:
+          file_path: !input snapshot_path
+          timestamp: "{{ now().isoformat() }}"
+          entity_id: "{{ call_sensor }}"
+
+  - alias: "Run additional actions"
+    choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ additional_actions | length > 0 }}"
+        sequence: !input additional_actions
+
+variables:
+  fire_event: !input fire_event
+  call_sensor: !input call_sensor

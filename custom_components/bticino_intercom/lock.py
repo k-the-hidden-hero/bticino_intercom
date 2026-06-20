@@ -19,7 +19,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,6 +80,7 @@ async def async_setup_entry(
     if not entities:
         _LOGGER.debug("No BTicino lock modules found or configured to be represented as lock")
 
+    cleanup_orphaned_entities(hass, entry.entry_id, "lock", entities)
     async_add_entities(entities)
 
 
@@ -160,6 +161,10 @@ class BticinoLock(BticinoEntity, LockEntity):
                 self._relock_canceller = None
             self._attr_is_locked = True
             self.async_write_ha_state()
+
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open (unlatch) the door — a momentary unlock pulse."""
+        await self.async_unlock(**kwargs)
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock with optimistic state."""
@@ -287,6 +292,10 @@ class BticinoLightAsLock(BticinoEntity, LockEntity):
                 self._relock_canceller = None
             self._attr_is_locked = True
             self.async_write_ha_state()
+
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open the door (turn on the light) — a momentary pulse."""
+        await self.async_unlock(**kwargs)
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the door (turn off the light)."""
