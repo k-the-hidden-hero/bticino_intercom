@@ -244,9 +244,9 @@ data:
 
 ---
 
-## v2.0 Beta Testing
+## v2.0 (Stable) — WebRTC live video & two-way audio
 
-v2.0 is currently in release candidate stage. If you want to help test, here's what you need.
+v2.0 is the recommended version for HA ≥ 2026.5. For older HA, stay on the v1.9.x stable line.
 
 ### What to install
 
@@ -260,15 +260,16 @@ You need **two** custom components for the full v2.0 experience:
 > [!IMPORTANT]
 > **Do NOT use AlexxIT's WebRTC integration** (`custom_components/webrtc`) or other third-party WebRTC players to display the BTicino camera. They are not compatible with the BTicino signaling protocol and will cause crashes, especially on iOS/Safari (WebKit). Use the dedicated card from `bticino_ha_extras`.
 
-### Installing the RC
+### Installing v2.0
 
 **Integration (HACS):**
-1. In HACS, go to **BTicino Intercom** > click the three-dot menu > **Redownload**
-2. Enable **"Show beta versions"** and select the latest `2.0.0-rcX`
-3. Restart Home Assistant
+1. In HACS, go to **BTicino Intercom** > **Update** (HACS picks up v2.0 once it's released)
+2. Restart Home Assistant
+
+**Or downgrade to v1.9.x** if your HA is older than 2026.5.0.
 
 **Integration (manual):**
-1. Download the latest `v2.0.0-rcX` from [Releases](https://github.com/k-the-hidden-hero/bticino_intercom/releases)
+1. Download the latest `v2.0.0` from [Releases](https://github.com/k-the-hidden-hero/bticino_intercom/releases)
 2. Replace `custom_components/bticino_intercom/` with the new version
 3. Clear `__pycache__` if using file sync: `find custom_components/bticino_intercom -name __pycache__ -exec rm -rf {} +`
 4. Restart Home Assistant
