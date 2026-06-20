@@ -70,9 +70,7 @@ def _print_inventory(home, target_id: str, bridge_id: str | None) -> None:
             flags.append("BRIDGE")
         if module.id == target_id:
             flags.append("TARGET")
-        print(
-            f"  {module.name:<28} {module.type:<8} {module.id:<28} {','.join(flags)}"
-        )
+        print(f"  {module.name:<28} {module.type:<8} {module.id:<28} {','.join(flags)}")
     print()
 
 
@@ -119,9 +117,7 @@ async def main() -> None:
         target_id = args.module_id or bridge_id
 
         if target_id is None:
-            _LOGGER.error(
-                "No bridge (BNC1/BNCX) found and no --module-id given; nothing to target."
-            )
+            _LOGGER.error("No bridge (BNC1/BNCX) found and no --module-id given; nothing to target.")
             sys.exit(1)
 
         tz = home.raw_data.get("timezone")
@@ -133,8 +129,7 @@ async def main() -> None:
         print(f"Bridge module id: {bridge_id}")
 
         while True:
-            print("Menu:  [u] unlock/open ({\"lock\": false})   "
-                  "[l] lock/close ({\"lock\": true})   [q] quit")
+            print('Menu:  [u] unlock/open ({"lock": false})   [l] lock/close ({"lock": true})   [q] quit')
             choice = input("> ").strip().lower()
             if choice == "u":
                 await _send(account, home, target_id, bridge_id, tz, {"lock": False})

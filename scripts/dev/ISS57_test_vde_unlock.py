@@ -173,16 +173,18 @@ async def _send_unlock(
         "User-Agent": build_user_agent(),
         "Content-Type": "application/json; charset=utf-8",
     }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(SYNC_COMMAND_URL, json=body, headers=headers, timeout=30) as resp:
-            text = await resp.text()
-            print("\n--- response ---")
-            print(f"HTTP {resp.status}")
-            try:
-                parsed = json.loads(text)
-                print(json.dumps(parsed, indent=2))
-            except ValueError:
-                print(text)
+    async with (
+        aiohttp.ClientSession() as session,
+        session.post(SYNC_COMMAND_URL, json=body, headers=headers, timeout=30) as resp,
+    ):
+        text = await resp.text()
+        print("\n--- response ---")
+        print(f"HTTP {resp.status}")
+        try:
+            parsed = json.loads(text)
+            print(json.dumps(parsed, indent=2))
+        except ValueError:
+            print(text)
     print()
 
 
@@ -228,14 +230,9 @@ async def main() -> None:
         if args.list:
             return
         if args.module_id:
-            print(
-                f"About to send vde.Unlock to {args.module_id} "
-                f"(secondaryLock={args.secondary})."
-            )
+            print(f"About to send vde.Unlock to {args.module_id} (secondaryLock={args.secondary}).")
             if _confirm(args.yes):
-                await _send_unlock(
-                    token, home.id, args.module_id, bridge_id, args.secondary
-                )
+                await _send_unlock(token, home.id, args.module_id, bridge_id, args.secondary)
             else:
                 print("Cancelled.\n")
             return
@@ -243,10 +240,7 @@ async def main() -> None:
         # interactive mode
         modules = list(home.modules)
         while True:
-            print(
-                "Menu:  [s] send vde.Unlock to a module   "
-                "[L] list modules   [q] quit"
-            )
+            print("Menu:  [s] send vde.Unlock to a module   [L] list modules   [q] quit")
             choice = input("> ").strip().lower()
             if choice == "q":
                 break
@@ -263,18 +257,13 @@ async def main() -> None:
                 continue
             target = modules[int(idx)]
 
-            lock = input(
-                "Which lock?  [p] primary / main entrance   [s] secondary / gate: "
-            ).strip().lower()
+            lock = input("Which lock?  [p] primary / main entrance   [s] secondary / gate: ").strip().lower()
             if lock not in ("p", "s"):
                 print("Invalid lock choice.")
                 continue
             secondary = lock == "s"
 
-            print(
-                f"\nAbout to send vde.Unlock to module {target.id} "
-                f"(type={target.type}, secondaryLock={secondary})."
-            )
+            print(f"\nAbout to send vde.Unlock to module {target.id} (type={target.type}, secondaryLock={secondary}).")
             if _confirm(args.yes):
                 await _send_unlock(token, home.id, target.id, bridge_id, secondary)
             else:
