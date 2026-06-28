@@ -183,3 +183,86 @@ async def test_offer_mode_when_no_active_call(
     # send_offer should have been called, not send_answer
     signaling.send_offer.assert_called_once()
     signaling.send_answer.assert_not_called()
+
+
+def _prep_offer_signaling(hass, entry, *, session_id: str):
+    """Configure the shared mock signaling client for an offer-mode test."""
+    signaling = hass.data[DOMAIN][entry.entry_id]["signaling_client"]
+    signaling.ensure_connected = AsyncMock()
+    signaling.resubscribe = AsyncMock()
+    signaling.send_offer = AsyncMock(return_value=session_id)
+    signaling.send_terminate = AsyncMock()
+    signaling.session_id = session_id
+    return signaling
+
+
+_OFFER_SDP = "v=0\r\no=- 9 0 IN IP4 0.0.0.0\r\na=setup:actpass\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+
+
+async def test_offer_session_terminated_on_close_without_answer(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Issue #58/#60 leak: an offer that never receives an answer must still be
+    terminated when the stream closes, otherwise the device peer slot leaks and
+    eventually every view fails with 'Max number of peers reached'."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_leak")
+
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", [].append)
+
+    # Device never answered; the frontend tears the stream down.
+    camera.close_webrtc_session("ha_sess")
+    await hass.async_block_till_done()
+
+    signaling.send_terminate.assert_called_once()
+
+
+async def test_offer_session_cleaned_up_after_device_terminate(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Issue #58/#60 leak: when the device rejects the offer with a terminate
+    event ('Max number of peers reached'), the session must still be cleaned up
+    on close instead of leaking the peer."""
+    from homeassistant.components.camera.webrtc import WebRTCError
+
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_rej")
+
+    messages = []
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", messages.append)
+
+    # Device rejects the offer (Max peers) via the on_event callback.
+    await signaling._on_event("sess_rej", "terminate", {"data": {"error": {"message": "Max number of peers reached"}}})
+    assert any(isinstance(m, WebRTCError) for m in messages)
+
+    # Stream torn down -> the session must be terminated, not leaked.
+    camera.close_webrtc_session("ha_sess")
+    await hass.async_block_till_done()
+    signaling.send_terminate.assert_called_once()
+
+
+async def test_offer_session_terminated_on_close_after_answer(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Regression guard: the normal answered-then-closed path still terminates."""
+    from homeassistant.components.camera.webrtc import WebRTCAnswer
+
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_ok")
+
+    messages = []
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", messages.append)
+
+    answer_sdp = "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\na=setup:active\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+    await signaling._on_answer("sess_ok", answer_sdp)
+    assert any(isinstance(m, WebRTCAnswer) for m in messages)
+
+    camera.close_webrtc_session("ha_sess")
+    await hass.async_block_till_done()
+    signaling.send_terminate.assert_called_once()

@@ -411,7 +411,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         start_listener_remove = None
     else:
         _LOGGER.debug("Home Assistant starting, scheduling WebSocket manager via listener.")
-        start_listener_remove = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _async_start_websocket_manager)
+
+        async def _start_after_ha_start(event: HAEvent) -> None:
+            # Route through _deferred_start_websocket so we wait for the entry to
+            # reach LOADED before starting, exactly like the already-running path.
+            # Otherwise the manager could start while the entry is still
+            # SETUP_IN_PROGRESS; a first failed connect then hits the
+            # entry.state == LOADED guard and breaks the loop permanently,
+            # leaving the integration with no WebSocket (issue #58 symptom).
+            await _deferred_start_websocket(hass, entry, _async_start_websocket_manager)
+
+        start_listener_remove = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _start_after_ha_start)
 
     # Store the removal function for the start listener
     hass.data[DOMAIN][entry.entry_id][START_LISTENER_REMOVE_KEY] = start_listener_remove

@@ -192,3 +192,51 @@ async def test_reject_call_service_no_active_call(
 
     signaling_client.send_terminate.assert_not_called()
     assert len(events) == 0
+
+
+async def test_deferred_start_websocket_starts_when_loaded(hass: HomeAssistant) -> None:
+    """The WebSocket manager starts immediately when the entry is already LOADED."""
+    from custom_components.bticino_intercom import _deferred_start_websocket
+
+    entry = MagicMock()
+    entry.state = ConfigEntryState.LOADED
+    start_fn = AsyncMock()
+
+    await _deferred_start_websocket(hass, entry, start_fn)
+
+    start_fn.assert_awaited_once()
+
+
+async def test_deferred_start_websocket_waits_for_loaded(hass: HomeAssistant) -> None:
+    """It waits while the entry is still setting up, then starts once LOADED.
+
+    Guards the fix for the issue #58 symptom where the manager started during
+    SETUP_IN_PROGRESS and broke out of its loop permanently. Both start paths
+    (HA-already-running and EVENT_HOMEASSISTANT_START) now go through this helper.
+    """
+    from unittest.mock import PropertyMock
+
+    from custom_components.bticino_intercom import _deferred_start_websocket
+
+    entry = MagicMock()
+    type(entry).state = PropertyMock(side_effect=[ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.LOADED])
+    start_fn = AsyncMock()
+
+    with patch("custom_components.bticino_intercom.asyncio.sleep", AsyncMock()):
+        await _deferred_start_websocket(hass, entry, start_fn)
+
+    start_fn.assert_awaited_once()
+
+
+async def test_deferred_start_websocket_gives_up_if_never_loaded(hass: HomeAssistant) -> None:
+    """If the entry never reaches LOADED, the manager is not started."""
+    from custom_components.bticino_intercom import _deferred_start_websocket
+
+    entry = MagicMock()
+    entry.state = ConfigEntryState.SETUP_IN_PROGRESS
+    start_fn = AsyncMock()
+
+    with patch("custom_components.bticino_intercom.asyncio.sleep", AsyncMock()):
+        await _deferred_start_websocket(hass, entry, start_fn)
+
+    start_fn.assert_not_awaited()
