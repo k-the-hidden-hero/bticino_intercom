@@ -1,4 +1,4 @@
-# BTicino Classe 100X/300X Integration for Home Assistant
+# BTicino Classe 100X/300X/300 EOS Integration for Home Assistant
 
 [![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 [![GitHub Release](https://img.shields.io/github/v/release/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/releases/latest)
@@ -6,7 +6,10 @@
 [![GitHub Issues](https://img.shields.io/github/issues/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/issues)
 [![License](https://img.shields.io/github/license/k-the-hidden-hero/bticino_intercom)](LICENSE)
 
-A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
+A Home Assistant custom integration for **BTicino Classe 100X, 300X and 300 EOS** video intercom systems. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
+
+> [!NOTE]
+> **Classe 300 EOS support.** The newer Classe 300 EOS (bridge type **BNCX**) does not return a `variant` field on its modules — only the raw `type` (BNDL/BNEU/BNSL). The integration identifies modules by their canonical `type`, so the 300 EOS gets the same entities (camera, lock, light, doorbell) as the older models, with no extra configuration.
 
 Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Uses a persistent WebSocket connection for real-time call notifications and periodic polling for state synchronization.
 
@@ -345,7 +348,7 @@ When reporting a v2.0 bug:
 
 - Home Assistant 2026.3 or later
 - Home Assistant 2025.x or later (Python 3.13+)
-- A BTicino Classe 100X or 300X connected to the Netatmo cloud
+- A BTicino Classe 100X, 300X or 300 EOS connected to the Netatmo cloud
 - [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.7.1 (installed automatically)
 
 ---
