@@ -44,6 +44,7 @@ _LOGGER = logging.getLogger(__name__)
 RECONNECT_DELAY = 30  # Default delay, overridden by smart backoff
 BOOT_RETRY_DELAYS = [5, 10, 30, 30, 30, 60]  # Backoff al boot
 RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
+MAX_CONSECUTIVE_WS_FAILURES = 5  # Force config entry reload after this many consecutive failures
 TOKEN_RESUBSCRIBE_INTERVAL = 3600  # Re-subscribe with fresh token every hour
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
@@ -355,6 +356,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "boot" if is_boot else "runtime",
                         delay,
                     )
+
+                    # After too many consecutive failures, force a full
+                    # config entry reload to reset all state cleanly.
+                    if not is_boot and attempt >= MAX_CONSECUTIVE_WS_FAILURES:
+                        _LOGGER.error(
+                            "WebSocket failed %d consecutive times, forcing config entry reload.",
+                            attempt,
+                        )
+                        hass.async_create_task(
+                            hass.config_entries.async_reload(entry.entry_id),
+                            f"{DOMAIN} auto-reload after WS failure",
+                        )
+                        break
+
                     try:
                         await asyncio.sleep(delay)
                     except asyncio.CancelledError:
