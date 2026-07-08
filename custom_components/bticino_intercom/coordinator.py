@@ -38,11 +38,16 @@ from .const import (
 )
 from .history import EventHistoryStore
 
-# WebSocket is considered stale if no message received for this many seconds.
-# The server sends periodic pings (every 20s) that count as messages in the
-# websockets library, so silence beyond this threshold means the connection
-# is likely dead but not yet detected by TCP keepalive.
-WS_STALE_THRESHOLD = 600  # 10 minutes
+# WebSocket is considered stale if no application message has been received
+# for this many seconds.  Note: _last_ws_message_time only updates on data
+# frames reaching the message callback — protocol-level WS pings do not count.
+# 300s keeps detection reasonably fast without flagging quiet-but-healthy
+# connections during idle periods.
+WS_STALE_THRESHOLD = 300  # 5 minutes
+
+# After this many consecutive transient API failures, raise UpdateFailed
+# instead of returning stale data, so entities are properly marked unavailable.
+MAX_CONSECUTIVE_TRANSIENT_ERRORS = 3
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +88,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._main_device_id = None
         self._last_ws_message_time: datetime | None = None
         self._ws_stale = False
+        self._consecutive_transient_errors = 0
         # Per-module active call sessions for retransmission dedup.
         # {"started": datetime, "last_seen": datetime,
         #  "watchdog": asyncio.Task | None,
@@ -231,19 +237,36 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     )
                     self._ws_stale = True
 
+            # Successful update: reset transient error counter
+            self._consecutive_transient_errors = 0
             return final_data
 
         except AuthError as err:
             # Auth errors are critical — must re-authenticate
             raise UpdateFailed(f"Authentication error: {err}") from err
         except (ApiError, TimeoutError, OSError, ConnectionError) as err:
-            # Transient errors: return last known data instead of marking
-            # all entities unavailable. Matches mobile app behavior.
+            self._consecutive_transient_errors += 1
+            # Transient errors: return last known data for the first few
+            # failures to avoid flapping.  After MAX_CONSECUTIVE_TRANSIENT_ERRORS
+            # in a row, raise UpdateFailed so entities are properly marked
+            # unavailable — the connection is likely dead at that point.
             if self.data and self.data.get("modules"):
+                if self._consecutive_transient_errors >= MAX_CONSECUTIVE_TRANSIENT_ERRORS:
+                    _LOGGER.error(
+                        "API has failed %d times consecutively (%s: %s), marking entities unavailable.",
+                        self._consecutive_transient_errors,
+                        type(err).__name__,
+                        err,
+                    )
+                    raise UpdateFailed(
+                        f"API error after {self._consecutive_transient_errors} consecutive failures: {err}"
+                    ) from err
                 _LOGGER.warning(
-                    "Transient error during update (%s: %s), keeping last known data.",
+                    "Transient error during update (%s: %s), keeping last known data (%d/%d).",
                     type(err).__name__,
                     err,
+                    self._consecutive_transient_errors,
+                    MAX_CONSECUTIVE_TRANSIENT_ERRORS,
                 )
                 return self.data
             raise UpdateFailed(f"API error (no previous data): {err}") from err

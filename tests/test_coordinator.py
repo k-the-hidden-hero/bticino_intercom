@@ -6,7 +6,10 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import UpdateFailed
+from pybticino.exceptions import ApiError
 from pytest_homeassistant_custom_component.common import async_capture_events
 
 from custom_components.bticino_intercom.const import (
@@ -20,7 +23,10 @@ from custom_components.bticino_intercom.const import (
     EVENT_TYPE_TERMINATED,
     SIGNAL_CALL_RECEIVED,
 )
-from custom_components.bticino_intercom.coordinator import BticinoIntercomCoordinator
+from custom_components.bticino_intercom.coordinator import (
+    MAX_CONSECUTIVE_TRANSIENT_ERRORS,
+    BticinoIntercomCoordinator,
+)
 
 from .conftest import BRIDGE_MAC, EXTERNAL_UNIT_ID, SESSION_ID
 
@@ -702,3 +708,68 @@ class TestRtcTerminateDedup:
                 await coordinator._handle_websocket_message(ws_rtc_rescind)
 
         assert mock_refresh.call_count == 1
+
+
+# =============================================================================
+# Transient error tracking (consecutive API failures)
+# =============================================================================
+
+
+class TestTransientErrorTracking:
+    """Isolated transient errors return stale data; sustained failures must
+    raise UpdateFailed so entities are properly marked unavailable."""
+
+    async def test_isolated_transient_error_returns_stale_data(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """A single transient error keeps last known data (no UpdateFailed)."""
+        coordinator.account.async_update_topology.side_effect = ApiError(500, "Server down")
+
+        result = await coordinator._async_update_data()
+
+        assert result is coordinator.data
+        assert coordinator._consecutive_transient_errors == 1
+
+    async def test_consecutive_transient_errors_raise_update_failed(
+        self, coordinator: BticinoIntercomCoordinator
+    ) -> None:
+        """After MAX_CONSECUTIVE_TRANSIENT_ERRORS failures, UpdateFailed is raised."""
+        coordinator.account.async_update_topology.side_effect = ApiError(500, "Server down")
+
+        # The first N-1 failures degrade gracefully to stale data
+        for _ in range(MAX_CONSECUTIVE_TRANSIENT_ERRORS - 1):
+            result = await coordinator._async_update_data()
+            assert result is coordinator.data
+
+        # The Nth consecutive failure must surface as UpdateFailed
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    async def test_success_resets_transient_error_counter(
+        self, coordinator: BticinoIntercomCoordinator, mock_account: AsyncMock
+    ) -> None:
+        """A successful update resets the counter, re-arming graceful degradation."""
+        coordinator.account = mock_account
+
+        # Two failures bring the counter to the brink
+        mock_account.async_update_topology.side_effect = ApiError(500, "Server down")
+        for _ in range(MAX_CONSECUTIVE_TRANSIENT_ERRORS - 1):
+            await coordinator._async_update_data()
+        assert coordinator._consecutive_transient_errors == MAX_CONSECUTIVE_TRANSIENT_ERRORS - 1
+
+        # A successful update resets the counter
+        mock_account.async_update_topology.side_effect = None
+        await coordinator._async_update_data()
+        assert coordinator._consecutive_transient_errors == 0
+
+        # The next failure degrades gracefully again instead of raising
+        mock_account.async_update_topology.side_effect = ApiError(500, "Server down")
+        result = await coordinator._async_update_data()
+        assert result is coordinator.data
+        assert coordinator._consecutive_transient_errors == 1
+
+    async def test_transient_error_without_previous_data_raises(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """With no previous data to fall back on, even one failure raises."""
+        coordinator.data = {}
+        coordinator.account.async_update_topology.side_effect = ApiError(500, "Server down")
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
