@@ -38,11 +38,12 @@ from .const import (
 )
 from .history import EventHistoryStore
 
-# WebSocket is considered stale if no message received for this many seconds.
-# The server sends periodic pings (every 20s) that count as messages in the
-# websockets library, so silence beyond this threshold means the connection
-# is likely dead but not yet detected by TCP keepalive.
-WS_STALE_THRESHOLD = 180  # 3 minutes (server pings every ~20s, so 9 missed pings)
+# WebSocket is considered stale if no application message has been received
+# for this many seconds.  Note: _last_ws_message_time only updates on data
+# frames reaching the message callback — protocol-level WS pings do not count.
+# 300s keeps detection reasonably fast without flagging quiet-but-healthy
+# connections during idle periods.
+WS_STALE_THRESHOLD = 300  # 5 minutes
 
 # After this many consecutive transient API failures, raise UpdateFailed
 # instead of returning stale data, so entities are properly marked unavailable.

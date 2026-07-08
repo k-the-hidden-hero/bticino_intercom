@@ -350,12 +350,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     delays = BOOT_RETRY_DELAYS if is_boot else RUNTIME_RETRY_DELAYS
                     delay = delays[min(attempt, len(delays) - 1)]
                     attempt += 1
-                    _LOGGER.info(
-                        "WebSocket reconnect attempt %d (%s), waiting %ds...",
-                        attempt,
-                        "boot" if is_boot else "runtime",
-                        delay,
-                    )
 
                     # After too many consecutive failures, force a full
                     # config entry reload to reset all state cleanly.
@@ -364,12 +358,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             "WebSocket failed %d consecutive times, forcing config entry reload.",
                             attempt,
                         )
-                        hass.async_create_task(
-                            hass.config_entries.async_reload(entry.entry_id),
-                            f"{DOMAIN} auto-reload after WS failure",
-                        )
+                        hass.config_entries.async_schedule_reload(entry.entry_id)
                         break
 
+                    _LOGGER.info(
+                        "WebSocket reconnect attempt %d (%s), waiting %ds...",
+                        attempt,
+                        "boot" if is_boot else "runtime",
+                        delay,
+                    )
                     try:
                         await asyncio.sleep(delay)
                     except asyncio.CancelledError:
