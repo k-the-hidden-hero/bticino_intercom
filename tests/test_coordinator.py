@@ -719,9 +719,7 @@ class TestTransientErrorTracking:
     """Isolated transient errors return stale data; sustained failures must
     raise UpdateFailed so entities are properly marked unavailable."""
 
-    async def test_isolated_transient_error_returns_stale_data(
-        self, coordinator: BticinoIntercomCoordinator
-    ) -> None:
+    async def test_isolated_transient_error_returns_stale_data(self, coordinator: BticinoIntercomCoordinator) -> None:
         """A single transient error keeps last known data (no UpdateFailed)."""
         coordinator.account.async_update_topology.side_effect = ApiError(500, "Server down")
 
@@ -768,9 +766,7 @@ class TestTransientErrorTracking:
         assert result is coordinator.data
         assert coordinator._consecutive_transient_errors == 1
 
-    async def test_transient_error_without_previous_data_raises(
-        self, coordinator: BticinoIntercomCoordinator
-    ) -> None:
+    async def test_transient_error_without_previous_data_raises(self, coordinator: BticinoIntercomCoordinator) -> None:
         """With no previous data to fall back on, even one failure raises."""
         coordinator.data = {}
         coordinator.account.async_update_topology.side_effect = ApiError(500, "Server down")
