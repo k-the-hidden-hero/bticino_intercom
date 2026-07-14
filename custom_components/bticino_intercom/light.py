@@ -14,7 +14,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import cleanup_orphaned_entities, format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso, resolve_module_subtype
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,39 +33,23 @@ async def async_setup_entry(
     if coordinator.data and "modules" in coordinator.data:
         _LOGGER.debug("Light Setup: Found %d modules in coordinator data.", len(coordinator.data["modules"]))
         for module_id, module_data in coordinator.data["modules"].items():
-            variant = module_data.get("variant")
-            subtype = None
-            _LOGGER.debug("Light Setup: Checking module %s, Variant: %s", module_id, variant)
-            if variant and ":" in variant:
-                try:
-                    subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug("Light Setup: Extracted subtype: %s", subtype)
-                except IndexError:
-                    _LOGGER.warning(
-                        "Could not parse subtype from variant '%s' for module %s",
-                        variant,
-                        module_id,
-                    )
-                    subtype = None
+            subtype = resolve_module_subtype(module_data)
+            _LOGGER.debug("Light Setup: Checking module %s, subtype: %s", module_id, subtype)
 
             if subtype == SUBTYPE_STAIRCASE_LIGHT and not light_as_lock:
                 _LOGGER.debug(
-                    "Found light module %s (via variant subtype), representing as standard light.",
+                    "Found light module %s, representing as standard light.",
                     module_id,
                 )
                 entities.append(BticinoLight(coordinator, module_id))
             elif subtype == SUBTYPE_STAIRCASE_LIGHT and light_as_lock:
                 _LOGGER.debug(
-                    "Found light module %s (via variant subtype), but configured as lock. Skipping light entity creation.",
+                    "Found light module %s, but configured as lock. Skipping light entity creation.",
                     module_id,
                 )
             elif subtype:
                 _LOGGER.debug(
                     "Light Setup: Module %s subtype '%s' did not match expected light subtype.", module_id, subtype
-                )
-            elif not subtype and variant is not None:
-                _LOGGER.debug(
-                    "Light Setup: Module %s has variant '%s' but failed to extract subtype.", module_id, variant
                 )
 
     if not entities:

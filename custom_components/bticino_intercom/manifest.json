@@ -1,6 +1,6 @@
 {
   "domain": "bticino_intercom",
-  "name": "BTicino Classe 100X/300X",
+  "name": "BTicino Classe 100X/300X/300 EOS",
   "after_dependencies": ["media_source"],
   "codeowners": ["@k-the-hidden-hero"],
   "config_flow": true,
@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/k-the-hidden-hero/bticino_intercom/issues",
   "loggers": ["pybticino"],
   "requirements": ["pybticino>=1.8.2"],
-  "version": "2.0.1"
+  "version": "2.1.0"
 }

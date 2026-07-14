@@ -25,7 +25,7 @@ from .const import (
 )
 from .coordinator import BticinoIntercomCoordinator
 from .entity import BticinoEntity
-from .utils import cleanup_orphaned_entities, format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso, resolve_module_subtype
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,35 +42,17 @@ async def async_setup_entry(
     if coordinator.data and "modules" in coordinator.data:
         _LOGGER.debug("Binary Sensor Setup: Found %d modules in coordinator data.", len(coordinator.data["modules"]))
         for module_id, module_data in coordinator.data["modules"].items():
-            variant = module_data.get("variant")
-            subtype = None
-            _LOGGER.debug("Binary Sensor Setup: Checking module %s, Variant: %s", module_id, variant)
-            if variant and ":" in variant:
-                try:
-                    subtype = variant.split(":", 1)[1]
-                    _LOGGER.debug("Binary Sensor Setup: Extracted subtype: %s", subtype)
-                except IndexError:
-                    _LOGGER.warning(
-                        "Could not parse subtype from variant '%s' for module %s",
-                        variant,
-                        module_id,
-                    )
-                    subtype = None
+            subtype = resolve_module_subtype(module_data)
+            _LOGGER.debug("Binary Sensor Setup: Checking module %s, subtype: %s", module_id, subtype)
 
             if subtype == SUBTYPE_EXTERNAL_UNIT:
-                _LOGGER.debug("Found external unit module (via variant subtype): %s", module_id)
+                _LOGGER.debug("Found external unit module: %s", module_id)
                 entities.append(BticinoCallBinarySensor(coordinator, module_id))
             elif subtype:
                 _LOGGER.debug(
                     "Binary Sensor Setup: Module %s subtype '%s' did not match expected external unit subtype.",
                     module_id,
                     subtype,
-                )
-            elif not subtype and variant is not None:
-                _LOGGER.debug(
-                    "Binary Sensor Setup: Module %s has variant '%s' but failed to extract subtype.",
-                    module_id,
-                    variant,
                 )
 
     # Add bridge "busy" sensor if bridge is available
@@ -103,14 +85,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
 
         if self._bridge_id:
             for other_module_id, other_module_data in coordinator.data.get("modules", {}).items():
-                other_variant = other_module_data.get("variant")
-                other_subtype = None
-                if other_variant and ":" in other_variant:
-                    try:
-                        other_subtype = other_variant.split(":", 1)[1]
-                    except IndexError:
-                        other_subtype = None
-
+                other_subtype = resolve_module_subtype(other_module_data)
                 if other_module_data.get("bridge") == self._bridge_id and other_subtype == SUBTYPE_DOORLOCK:
                     self._associated_lock_ids.append(other_module_id)
                     found_locks_data.append(other_module_data)

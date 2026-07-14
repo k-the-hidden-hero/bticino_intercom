@@ -22,9 +22,9 @@ from homeassistant.util.dt import utc_from_timestamp, utcnow
 from pybticino import AsyncAccount, SignalingClient
 from webrtc_models import RTCConfiguration, RTCIceCandidateInit, RTCIceServer
 
-from .const import DOMAIN, IMAGE_CACHE_SECONDS
+from .const import DOMAIN, IMAGE_CACHE_SECONDS, SUBTYPE_EXTERNAL_UNIT
 from .coordinator import BticinoIntercomCoordinator
-from .utils import cleanup_orphaned_entities, format_timestamp_iso
+from .utils import cleanup_orphaned_entities, format_timestamp_iso, resolve_module_subtype
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,8 +55,7 @@ async def async_setup_entry(
 
     # Create one WebRTC camera per external unit (BNEU module)
     for mid, mdata in coordinator.data.get("modules", {}).items():
-        variant = mdata.get("variant", "")
-        if "bneu_external_unit" in variant:
+        if resolve_module_subtype(mdata) == SUBTYPE_EXTERNAL_UNIT:
             entities.append(
                 BticinoWebRTCCamera(
                     coordinator,

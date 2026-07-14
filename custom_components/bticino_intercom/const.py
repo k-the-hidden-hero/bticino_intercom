@@ -39,6 +39,21 @@ SUBTYPE_TO_PLATFORM = {
     SUBTYPE_EXTERNAL_UNIT: Platform.BINARY_SENSOR,  # Assuming external unit acts as a doorbell sensor
 }
 
+# The raw module "type" is the canonical, always-present discriminator. It is
+# returned for both the Classe 100X/300X and the Classe 300 EOS (bridge BNCX),
+# whereas the verbose "variant" field is only present on the older models. We map
+# the type directly so a single code path covers every device family.
+TYPE_TO_SUBTYPE = {
+    "BNDL": SUBTYPE_DOORLOCK,
+    "BNSL": SUBTYPE_STAIRCASE_LIGHT,
+    "BNEU": SUBTYPE_EXTERNAL_UNIT,
+}
+
+# Subtypes already handled by the integration. A "variant" carrying a subtype
+# outside this set is treated as a newer Netatmo variant and then takes
+# precedence over the type-derived value (forward-compat override).
+KNOWN_SUBTYPES = frozenset(SUBTYPE_TO_PLATFORM)
+
 
 # Push types from websocket
 PUSH_TYPE_RTC = "rtc"  # Base type for RTC events
