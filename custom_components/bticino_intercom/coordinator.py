@@ -135,13 +135,24 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         try:
             await self.account.async_update_topology()
             if not self.account.homes:
-                _LOGGER.warning("No homes found for this account.")
-                return {
-                    "homes": {},
-                    "modules": {},
-                    "events_history": {},
-                    DATA_LAST_EVENT: {},
-                }
+                # An empty topology is a degraded cloud response, not a real
+                # "no homes" state (the config entry was created by selecting
+                # one of this account's homes). Reporting success with empty
+                # data would let platform setup run with zero modules and
+                # destructively clean up registered entities (issue #68).
+                self._consecutive_transient_errors += 1
+                if (
+                    self.data
+                    and self.data.get("modules")
+                    and self._consecutive_transient_errors < MAX_CONSECUTIVE_TRANSIENT_ERRORS
+                ):
+                    _LOGGER.warning(
+                        "Topology returned no homes, keeping last known data (%d/%d).",
+                        self._consecutive_transient_errors,
+                        MAX_CONSECUTIVE_TRANSIENT_ERRORS,
+                    )
+                    return self.data
+                raise UpdateFailed("No homes found for this account (empty topology)")
             if self.home_id not in self.account.homes:
                 raise UpdateFailed(f"Selected home_id {self.home_id} not found in account topology.")
 
@@ -241,6 +252,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             self._consecutive_transient_errors = 0
             return final_data
 
+        except UpdateFailed:
+            # Already a coordinator failure (empty topology, missing home or
+            # bridge) — don't let the generic handler re-wrap it as
+            # "Unexpected error" with a full traceback.
+            raise
         except AuthError as err:
             # Auth errors are critical — must re-authenticate
             raise UpdateFailed(f"Authentication error: {err}") from err
