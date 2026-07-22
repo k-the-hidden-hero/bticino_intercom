@@ -773,3 +773,42 @@ class TestTransientErrorTracking:
 
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
+
+
+# =============================================================================
+# Empty topology handling (issue #68)
+# =============================================================================
+
+
+class TestEmptyTopology:
+    """An empty topology from the cloud must never be reported as success:
+    returning empty data lets platform setup run with zero modules and
+    cleanup_orphaned_entities then permanently deletes registered entities."""
+
+    async def test_empty_homes_without_previous_data_raises(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """At first refresh (no previous data), empty homes must raise UpdateFailed."""
+        coordinator.data = {"homes": {}, "modules": {}, "last_event": {}, "events_history": {}}
+        coordinator.account.homes = {}
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    async def test_empty_homes_with_previous_data_returns_stale(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """A single empty-topology response keeps last known data."""
+        coordinator.account.homes = {}
+
+        result = await coordinator._async_update_data()
+
+        assert result is coordinator.data
+        assert coordinator._consecutive_transient_errors == 1
+
+    async def test_sustained_empty_homes_raise_update_failed(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Repeated empty-topology responses eventually surface as UpdateFailed."""
+        coordinator.account.homes = {}
+
+        for _ in range(MAX_CONSECUTIVE_TRANSIENT_ERRORS - 1):
+            result = await coordinator._async_update_data()
+            assert result is coordinator.data
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()

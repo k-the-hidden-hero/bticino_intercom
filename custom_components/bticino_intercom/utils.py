@@ -69,6 +69,17 @@ def cleanup_orphaned_entities(
     Call this after building the entity list but before async_add_entities,
     so that stale entities from previous versions are automatically cleaned up.
     """
+    if not current_entities:
+        # Zero entities at setup almost always means a degraded cloud
+        # response (empty/partial topology), not real module removal.
+        # Removing here would permanently delete the user's registered
+        # entities on one bad boot (issue #68).
+        _LOGGER.warning(
+            "Skipping orphaned-entity cleanup for %s: no entities were created this setup",
+            domain,
+        )
+        return
+
     current_unique_ids = {e.unique_id for e in current_entities}
     ent_reg = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(ent_reg, entry_id):

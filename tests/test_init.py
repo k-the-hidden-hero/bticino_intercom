@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from pybticino.exceptions import ApiError, AuthError
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -95,6 +96,47 @@ async def test_setup_entry_api_failure(
         await hass.async_block_till_done()
 
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_empty_topology_at_boot_keeps_entities_and_retries(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+) -> None:
+    """Regression test for issue #68.
+
+    A transient empty topology at startup must NOT delete previously
+    registered entities: setup has to fail with ConfigEntryNotReady
+    (SETUP_RETRY) instead of proceeding with zero modules and letting
+    cleanup_orphaned_entities wipe the registry.
+    """
+    mock_config_entry.add_to_hass(hass)
+
+    # A lock entity registered by a previous healthy boot
+    ent_reg = er.async_get(hass)
+    lock_unique_id = f"{mock_config_entry.entry_id}_lock_d9a63b-a06f-2ef633a2f785"
+    lock_entry = ent_reg.async_get_or_create("lock", DOMAIN, lock_unique_id, config_entry=mock_config_entry)
+
+    # This boot, the cloud returns an empty topology
+    mock_account.homes = {}
+
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert ent_reg.async_get(lock_entry.entity_id) is not None
 
 
 async def test_unload_entry(
