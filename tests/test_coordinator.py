@@ -28,7 +28,7 @@ from custom_components.bticino_intercom.coordinator import (
     BticinoIntercomCoordinator,
 )
 
-from .conftest import BRIDGE_MAC, EXTERNAL_UNIT_ID, SESSION_ID
+from .conftest import BRIDGE_MAC, DOORLOCK_ID, EXTERNAL_UNIT_ID, HOME_ID, SESSION_ID
 
 # =============================================================================
 # Format A: RTC events
@@ -809,6 +809,94 @@ class TestEmptyTopology:
         for _ in range(MAX_CONSECUTIVE_TRANSIENT_ERRORS - 1):
             result = await coordinator._async_update_data()
             assert result is coordinator.data
+
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+
+# =============================================================================
+# Partial topology carry-forward
+# =============================================================================
+
+
+def _make_home(modules_by_id: dict) -> object:
+    """Build a mock home object with the given modules.
+
+    modules_by_id maps module_id -> raw_data dict. Returns an object exposing
+    ``raw_data`` and ``modules`` (a list of objects with ``id``/``raw_data``),
+    matching what pybticino's AsyncAccount.homes[home_id] provides.
+    """
+    from unittest.mock import MagicMock
+
+    modules = [MagicMock(id=mid, raw_data=data) for mid, data in modules_by_id.items()]
+    return MagicMock(id=HOME_ID, name="Test Home", raw_data={"name": "Test Home", "id": HOME_ID}, modules=modules)
+
+
+def _arm_topology(coordinator: BticinoIntercomCoordinator, modules_by_id: dict) -> None:
+    """Point the coordinator's account at a topology containing exactly these modules."""
+    acct = coordinator.account
+    acct.homes = {HOME_ID: _make_home(modules_by_id)}
+    acct.async_update_topology = AsyncMock()
+    acct.async_get_home_status = AsyncMock(return_value={"body": {"home": {"modules": []}}})
+    acct.async_get_events = AsyncMock(return_value={"body": {"home": {"events": []}}})
+
+
+class TestPartialTopologyCarryForward:
+    """A partial topology response must not strand a known module as unavailable."""
+
+    async def test_missing_leaf_module_is_carried_forward(
+        self, coordinator: BticinoIntercomCoordinator, mock_modules_data: dict
+    ) -> None:
+        """If the lock module is absent from a topology poll, keep its last-known data."""
+        # Seed previous data with the full module set (as a prior good poll would).
+        coordinator.data = {"homes": {}, "modules": dict(mock_modules_data), "last_event": {}, "events_history": {}}
+
+        # This topology response is missing the doorlock module (bridge still present).
+        partial = {mid: data for mid, data in mock_modules_data.items() if mid != DOORLOCK_ID}
+        _arm_topology(coordinator, partial)
+
+        result = await coordinator._async_update_data()
+
+        # The lock must survive so its entity stays available with last state.
+        assert DOORLOCK_ID in result["modules"]
+        assert result["modules"][DOORLOCK_ID]["reachable"] is True
+
+    async def test_missing_bridge_is_carried_forward_without_failing(
+        self, coordinator: BticinoIntercomCoordinator, mock_modules_data: dict
+    ) -> None:
+        """A partial topology missing even the bridge must not raise UpdateFailed."""
+        coordinator.data = {"homes": {}, "modules": dict(mock_modules_data), "last_event": {}, "events_history": {}}
+        coordinator._main_device_id = BRIDGE_MAC
+
+        # Only a leaf module comes back; the bridge is absent this round.
+        partial = {EXTERNAL_UNIT_ID: mock_modules_data[EXTERNAL_UNIT_ID]}
+        _arm_topology(coordinator, partial)
+
+        result = await coordinator._async_update_data()
+
+        assert BRIDGE_MAC in result["modules"]
+        assert coordinator.main_device_id == BRIDGE_MAC
+
+    async def test_full_topology_has_no_regression(
+        self, coordinator: BticinoIntercomCoordinator, mock_modules_data: dict
+    ) -> None:
+        """A complete topology returns every module exactly as before."""
+        coordinator.data = {"homes": {}, "modules": {}, "last_event": {}, "events_history": {}}
+        _arm_topology(coordinator, mock_modules_data)
+
+        result = await coordinator._async_update_data()
+
+        assert set(result["modules"]) == set(mock_modules_data)
+
+    async def test_first_update_without_bridge_still_fails(
+        self, coordinator: BticinoIntercomCoordinator, mock_modules_data: dict
+    ) -> None:
+        """With no previous data, a topology lacking a bridge must still raise."""
+        coordinator.data = {"homes": {}, "modules": {}, "last_event": {}, "events_history": {}}
+        coordinator._main_device_id = None
+
+        # Only a non-bridge leaf module, nothing to carry forward.
+        _arm_topology(coordinator, {EXTERNAL_UNIT_ID: mock_modules_data[EXTERNAL_UNIT_ID]})
 
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
