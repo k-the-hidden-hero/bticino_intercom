@@ -171,7 +171,27 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug("Found bridge module with MAC ID: %s", module_obj.id)
                     # Do NOT break, continue populating modules_data
 
-            if not bridge_module:
+            # Carry forward modules that were known previously but are absent
+            # from THIS topology response. A partial topology (e.g. after a
+            # network blip the cloud can answer with only a subset of the
+            # modules) must not silently drop a module and strand its entity as
+            # "unavailable" until a full topology happens to come back — keep
+            # the last-known data so the entity stays available with its last
+            # state, matching how the mobile app behaves.
+            previous_modules = self.data.get("modules", {})
+            for module_id, previous_data in previous_modules.items():
+                if module_id not in modules_data:
+                    _LOGGER.warning(
+                        "Module %s absent from topology response, keeping last-known data.",
+                        module_id,
+                    )
+                    modules_data[module_id] = previous_data
+                    # If the missing module is the bridge, recover it too so the
+                    # update doesn't fail on a transient partial topology.
+                    if bridge_module is None and mac_address_pattern.match(module_id):
+                        self._main_device_id = module_id
+
+            if not bridge_module and self._main_device_id not in modules_data:
                 # Log the available module types and IDs for debugging
                 available_modules_info = [
                     f"ID: {m.id}, Type: {m.raw_data.get('type', 'N/A')}, Variant: {m.raw_data.get('variant', 'N/A')}"
@@ -183,8 +203,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 )
                 raise UpdateFailed("No bridge module found in the system (MAC address ID check failed)")
 
-            # Store the bridge module ID as our main device ID
-            self._main_device_id = bridge_module.id
+            # Store the bridge module ID as our main device ID. When the bridge
+            # was carried forward from previous data (absent in this partial
+            # topology) bridge_module is None but _main_device_id already holds
+            # the recovered id, and bridge_raw comes from the kept module data.
+            if bridge_module is not None:
+                self._main_device_id = bridge_module.id
+            bridge_raw = (
+                bridge_module.raw_data if bridge_module is not None else modules_data.get(self._main_device_id, {})
+            )
 
             # Fetch Status Data
             try:
@@ -208,12 +235,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 config_entry_id=self.entry.entry_id,
                 identifiers={(DOMAIN, self._main_device_id)},
                 manufacturer="BTicino",
-                model=bridge_module.raw_data.get("type", DEFAULT_NAME),
+                model=bridge_raw.get("type", DEFAULT_NAME),
                 name=f"BTicino Intercom - {self.home_name}",
-                sw_version=str(
-                    bridge_module.raw_data.get("firmware_name")
-                    or bridge_module.raw_data.get("firmware_revision", "Unknown")
-                ),
+                sw_version=str(bridge_raw.get("firmware_name") or bridge_raw.get("firmware_revision", "Unknown")),
             )
 
             # Fetch Events
