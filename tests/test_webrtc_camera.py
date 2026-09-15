@@ -1,19 +1,30 @@
 """Tests for the BTicino WebRTC camera entity."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
 from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bticino_intercom.const import DOMAIN
 
+from .conftest import BRIDGE_MAC
+
 
 def _get_all_webrtc_cameras(hass, mock_setup_entry):
-    """Helper to retrieve all WebRTC camera entity objects (excluding Call Home)."""
+    """Helper to retrieve the external-unit WebRTC cameras (excluding Call Home).
+
+    Call Home is a WebRTC camera too — it dials the bridge's own module id — so
+    it has to be filtered out by unique_id, not by a missing module_id.
+    """
     entity_comp = hass.data["entity_components"]["camera"]
-    return [e for e in entity_comp.entities if hasattr(e, "_module_id") and e._module_id is not None]
+    return [
+        e
+        for e in entity_comp.entities
+        if getattr(e, "_module_id", None) is not None and not str(e.unique_id).endswith("_call_home")
+    ]
 
 
 def _get_webrtc_camera(hass, mock_setup_entry):
@@ -56,6 +67,46 @@ async def test_webrtc_camera_snapshot_entities(
     assert len(states) == 4  # snapshot + 2 webrtc + call_home
     names = {hass.states.get(s).attributes.get("friendly_name", "") for s in states}
     assert any("Snapshot" in n for n in names)
+
+
+def _get_call_home_camera(hass):
+    """Return the Call Home camera entity object."""
+    entity_comp = hass.data["entity_components"]["camera"]
+    return next(e for e in entity_comp.entities if str(e.unique_id).endswith("_call_home"))
+
+
+async def test_call_home_dials_the_indoor_unit(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Call Home must address the bridge's own module id.
+
+    The app has no dedicated call-home message: it sends the ordinary offer and
+    the call becomes a "call home" because the dialled module is not an external
+    unit. A missing module_id instead selects the default external unit, which
+    duplicates the doorbell camera and exhausts the device's peer slots.
+    """
+    camera = _get_call_home_camera(hass)
+    assert camera._module_id == BRIDGE_MAC
+
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_home")
+
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", [].append)
+    camera._cancel_answer_watchdog()
+
+    assert signaling.send_offer.call_args.kwargs["module_id"] == BRIDGE_MAC
+
+
+async def test_call_home_exists_on_voice_only_intercom(
+    hass: HomeAssistant,
+    mock_setup_entry_voice_only: MockConfigEntry,
+) -> None:
+    """A home without an external unit still gets Call Home."""
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(CAMERA_DOMAIN, DOMAIN, f"{mock_setup_entry_voice_only.entry_id}_call_home")
+    assert entity_id is not None
+    assert hass.states.get(entity_id) is not None
 
 
 async def test_answer_mode_when_active_call(
@@ -266,3 +317,69 @@ async def test_offer_session_terminated_on_close_after_answer(
     camera.close_webrtc_session("ha_sess")
     await hass.async_block_till_done()
     signaling.send_terminate.assert_called_once()
+
+
+async def test_unanswered_offer_is_terminated_by_watchdog(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """An offer the device never answers must not hold its peer slot until the
+    frontend happens to give up: the watchdog hands the slot back and reports
+    the failure, so the next view does not hit 'Max number of peers reached'."""
+    from homeassistant.components.camera.webrtc import WebRTCError
+
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_hang")
+
+    messages = []
+    with patch("custom_components.bticino_intercom.camera.ANSWER_TIMEOUT_SECONDS", 0):
+        await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", messages.append)
+        await hass.async_block_till_done()
+
+    signaling.send_terminate.assert_called_once()
+    assert any(isinstance(m, WebRTCError) and m.code == "no_answer" for m in messages)
+    assert camera._signaling_session_id is None
+
+
+async def test_own_stale_session_released_before_new_offer(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """A second attempt on the same camera hands back the slot the first attempt
+    left allocated instead of asking the device for one more peer."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_first")
+
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", [].append)
+    camera._cancel_answer_watchdog()
+    assert camera._signaling_session_id == "sess_first"
+
+    signaling.send_offer = AsyncMock(return_value="sess_second")
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess2", [].append)
+    camera._cancel_answer_watchdog()
+
+    signaling.send_terminate.assert_called_once()
+    assert camera._signaling_session_id == "sess_second"
+
+
+async def test_stale_session_kept_during_active_call(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """The session of a call in progress belongs to the device, not to us —
+    opening a camera must never hang up the doorbell."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = None
+    signaling = _prep_offer_signaling(hass, mock_setup_entry, session_id="sess_first")
+
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess", [].append)
+    camera._cancel_answer_watchdog()
+
+    # A call arrives on the other external unit before the retry.
+    camera.coordinator._active_call = {"session_id": "sess_call", "module_id": "other", "sdp": ""}
+    await camera.async_handle_async_webrtc_offer(_OFFER_SDP, "ha_sess2", [].append)
+    camera._cancel_answer_watchdog()
+
+    signaling.send_terminate.assert_not_called()

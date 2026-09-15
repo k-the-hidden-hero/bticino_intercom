@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
@@ -32,6 +33,17 @@ _LOGGER = logging.getLogger(__name__)
 # How long to cache the image locally after fetching (seconds)
 # Prevents re-downloading the same image repeatedly between coordinator updates
 
+# How long to wait for the device SDP answer before giving the peer slot back.
+# An offer the device never answers keeps a slot allocated on the device until
+# something terminates the session; until then every further stream is refused
+# with "Max number of peers reached" (#58, #60, #70, #72).
+ANSWER_TIMEOUT_SECONDS = 20
+
+# Call Home is answered by a person walking to the monitor, not by firmware, so
+# it needs far longer than a live-view offer. The device rings for ~30s (the
+# push events carry expiry=30); allow for that plus the pick-up.
+CALL_HOME_ANSWER_TIMEOUT_SECONDS = 60
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -49,24 +61,28 @@ async def async_setup_entry(
     account: AsyncAccount = hass.data[DOMAIN][entry.entry_id]["account"]
     signaling_client: SignalingClient = hass.data[DOMAIN][entry.entry_id]["signaling_client"]
 
-    entities: list[Camera] = [
-        BticinoSnapshotCamera(coordinator),
-        BticinoCallHomeCamera(coordinator, account, signaling_client),
-    ]
+    entities: list[Camera] = [BticinoSnapshotCamera(coordinator)]
 
     # Create one WebRTC camera per external unit (BNEU module)
-    for mid, mdata in coordinator.data.get("modules", {}).items():
-        variant = mdata.get("variant", "")
-        if "bneu_external_unit" in variant:
-            entities.append(
-                BticinoWebRTCCamera(
-                    coordinator,
-                    account,
-                    signaling_client,
-                    module_id=mid,
-                    module_name=mdata.get("name", mid),
-                )
+    external_units = [
+        (mid, mdata)
+        for mid, mdata in coordinator.data.get("modules", {}).items()
+        if "bneu_external_unit" in mdata.get("variant", "")
+    ]
+    for mid, mdata in external_units:
+        entities.append(
+            BticinoWebRTCCamera(
+                coordinator,
+                account,
+                signaling_client,
+                module_id=mid,
+                module_name=mdata.get("name", mid),
             )
+        )
+
+    # Call Home rings the indoor monitor: same offer as any other camera, but
+    # addressed to the bridge's own module id instead of an external unit.
+    entities.append(BticinoCallHomeCamera(coordinator, account, signaling_client))
 
     cleanup_orphaned_entities(hass, entry.entry_id, "camera", entities)
     async_add_entities(entities)
@@ -292,12 +308,15 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     _attr_supported_features = CameraEntityFeature.STREAM
     _attr_entity_registry_enabled_default = True
 
+    # Seconds to wait for the device's answer; None means ANSWER_TIMEOUT_SECONDS.
+    _answer_timeout: float | None = None
+
     def __init__(
         self,
         coordinator: BticinoIntercomCoordinator,
         account: AsyncAccount,
         signaling_client: SignalingClient,
-        module_id: str,
+        module_id: str | None,
         module_name: str,
     ) -> None:
         """Initialize the WebRTC camera."""
@@ -315,6 +334,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         # Per-camera signaling session ID (the shared SignalingClient tracks
         # only the LAST session across all cameras)
         self._signaling_session_id: str | None = None
+        # Watchdog that frees the device peer slot when no answer ever arrives
+        self._answer_watchdog: asyncio.Task | None = None
         self._poster_event_id: str | None = None
         self._poster_bytes: bytes | None = None
 
@@ -390,8 +411,27 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     # Methods:
     # - _enable_audio_sendrecv():      browser offer → device (recvonly → sendrecv)
     # - _inject_audio_ssrc():          browser offer → device (add synthetic sender SSRC)
+    # - _filter_video_codecs():        browser offer → device (H264 only; size limit)
     # - _fix_answer_audio_direction(): device answer → browser (sendrecv → sendonly)
+    # - _align_answer_with_offer():    device answer → browser (restore missing m-sections)
     # - convert_offer_to_answer_sdp(): DTLS role for answer mode (actpass → active)
+    #
+    # Two more rewrites, each with its own consequence:
+    #
+    # _filter_video_codecs() trims the offer to H264 because above ~8 KB of SDP
+    # the firmware drops off the cloud and reboots (#74). It only removes
+    # payload types, never renumbers them, so the device's answer stays a subset
+    # of the browser's original offer and needs no reverse mapping. Consequence:
+    # rtx is dropped with everything else, so lost video packets are not
+    # retransmitted — a robustness cost accepted to stop rebooting the hardware.
+    #
+    # _align_answer_with_offer() rebuilds m-sections the device left out, as
+    # rejected sections (port 0 + a=inactive). RFC 8829 requires one answer
+    # section per offered section, in order; the indoor monitor has no camera,
+    # so its Call Home answer carries audio only and Chrome refuses the lot.
+    # It is aligned against the *browser's* offer, captured before any of the
+    # rewrites above — the answer has to match what the browser sent, not the
+    # copy that went to the device.
 
     @staticmethod
     def _enable_audio_sendrecv(sdp: str) -> str:
@@ -599,6 +639,82 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         return "\r\n".join(result)
 
     @staticmethod
+    def _split_sdp_sections(sdp: str) -> tuple[list[str], list[list[str]]]:
+        """Split an SDP into its session-level lines and its m-sections."""
+        session: list[str] = []
+        sections: list[list[str]] = []
+        for line in sdp.split("\r\n"):
+            if line.startswith("m="):
+                sections.append([line])
+            elif sections:
+                sections[-1].append(line)
+            else:
+                session.append(line)
+        # Drop the trailing empty line produced by the final CRLF; it is
+        # re-added when the SDP is rebuilt, so it cannot end up mid-message.
+        if sections and sections[-1] and sections[-1][-1] == "":
+            sections[-1].pop()
+        elif session and session[-1] == "":
+            session.pop()
+        return session, sections
+
+    @staticmethod
+    def _section_key(section: list[str]) -> tuple[str, str]:
+        """Return (media type, mid) identifying an m-section."""
+        media = section[0].split()[0].removeprefix("m=")
+        mid = next((line.removeprefix("a=mid:") for line in section if line.startswith("a=mid:")), "")
+        return media, mid
+
+    @classmethod
+    def _align_answer_with_offer(cls, answer_sdp: str, offer_sdp: str) -> str:
+        """Make the answer's m-sections match the offer's, one for one, in order.
+
+        RFC 8829 requires an answer to carry exactly as many m-sections as the
+        offer, in the same order; a section the answerer does not want is kept
+        but rejected with port 0. The Call Home target is the indoor monitor,
+        which has no camera, so its answer can come back without the video
+        section the browser offered — and Chrome then refuses the whole answer,
+        which tears the call down the instant it is picked up.
+
+        Anything missing is rebuilt as a rejected section. An answer that
+        already lines up is returned untouched.
+        """
+        _, offer_sections = cls._split_sdp_sections(offer_sdp)
+        answer_session, answer_sections = cls._split_sdp_sections(answer_sdp)
+
+        if len(offer_sections) == len(answer_sections) and all(
+            cls._section_key(o) == cls._section_key(a) for o, a in zip(offer_sections, answer_sections, strict=True)
+        ):
+            return answer_sdp
+
+        remaining = list(answer_sections)
+        rebuilt: list[list[str]] = []
+        for offer_section in offer_sections:
+            media, mid = cls._section_key(offer_section)
+            match = next((a for a in remaining if cls._section_key(a) == (media, mid)), None)
+            if match is None:
+                # Fall back to the first unused section of the same media type:
+                # some firmware answers without repeating the mid.
+                match = next((a for a in remaining if cls._section_key(a)[0] == media), None)
+            if match is not None:
+                remaining.remove(match)
+                rebuilt.append(match)
+                continue
+
+            header = offer_section[0].split()
+            rejected = [" ".join([header[0], "0", *header[2:]]), "c=IN IP4 0.0.0.0", "a=inactive"]
+            if mid:
+                rejected.append(f"a=mid:{mid}")
+            _LOGGER.debug("Answer has no %s section; adding a rejected one (mid=%s)", media, mid or "?")
+            rebuilt.append(rejected)
+
+        lines = list(answer_session)
+        for section in rebuilt:
+            lines.extend(section)
+        lines.append("")  # final CRLF
+        return "\r\n".join(lines)
+
+    @staticmethod
     def convert_offer_to_answer_sdp(offer_sdp: str) -> str:
         """Convert a browser SDP offer to be usable as an answer to the device.
 
@@ -666,6 +782,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
         self._session_ready = False
         self._pending_candidates.clear()
+        # Keep the browser's own offer: the answer we hand back has to line up
+        # with it, not with the rewritten copy we send to the device.
+        browser_offer_sdp = offer_sdp
 
         try:
             # Ensure signaling is connected with a fresh token
@@ -675,12 +794,16 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             # Set up callbacks for this session
             async def on_answer(sig_session_id: str, sdp: str) -> None:
                 _LOGGER.info("Received answer SDP for session %s", sig_session_id)
+                self._cancel_answer_watchdog()
                 self._signaling_session_id = sig_session_id
                 # Only fix audio direction if we rewrote the offer from recvonly to sendrecv.
                 # If the browser natively sent sendrecv (e.g., two-way audio card),
                 # the answer's sendrecv is correct and must not be downgraded.
                 if audio_was_rewritten:
                     sdp = self._fix_answer_audio_direction(sdp)
+                # A camera-less target answers without a video section; Chrome
+                # rejects such an answer outright, so restore the shape.
+                sdp = self._align_answer_with_offer(sdp, browser_offer_sdp)
                 send_message(WebRTCAnswer(answer=sdp))
                 # Device has processed our offer and replied — safe to send ICE candidates now
                 self._session_ready = True
@@ -703,6 +826,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 error = data.get("data", {}).get("error", {})
                 error_msg = error.get("message", event_type) if error else event_type
                 _LOGGER.warning("Signaling event %s: %s", event_type, error_msg)
+                # The device already dropped the session — no answer is coming.
+                self._cancel_answer_watchdog()
                 send_message(WebRTCError(code=event_type, message=error_msg))
 
             self._signaling._on_answer = on_answer
@@ -748,6 +873,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             else:
                 # --- Offer mode: initiate on-demand call ---
                 _LOGGER.info("Sending WebRTC offer to device %s (module=%s)", device_id, self._module_id)
+                # A session left over from a previous view still holds its peer
+                # slot on the device.  Hand it back before asking for a new one,
+                # otherwise the device answers "Max number of peers reached".
+                await self._release_stale_session()
+
                 # Capture the session id from the offer ack right away. The device
                 # may reject the offer ("Max number of peers reached") or the stream
                 # may be torn down before an answer arrives — in both cases on_answer
@@ -761,6 +891,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 )
                 if offer_session_id:
                     self._signaling_session_id = offer_session_id
+                    self._arm_answer_watchdog(offer_session_id, send_message)
 
             # In answer mode, we're ready immediately (no on_answer callback expected).
             # In offer mode, on_answer handles this when the device responds.
@@ -772,6 +903,88 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         except Exception as err:
             _LOGGER.exception("Failed to handle WebRTC offer")
             send_message(WebRTCError(code="offer_failed", message=str(err)))
+
+    async def _release_stale_session(self) -> None:
+        """Terminate a session this camera left behind on an earlier attempt.
+
+        A view that ended without a clean terminate (device reboot, rejected
+        offer, browser closed mid-handshake) still holds its peer slot on the
+        device.  Clicking the same camera again then hits "Max number of peers
+        reached" instead of reusing the slot we already own.
+
+        Only this camera's own session is released — the shared SignalingClient
+        also tracks other cameras' sessions, which may still be streaming.
+        """
+        if self.coordinator.active_call:
+            # The device is on a call — that session is in use, not stale.
+            return
+
+        stale_session = self._signaling_session_id
+        if not stale_session:
+            return
+
+        _LOGGER.debug("Releasing stale signaling session %s before new offer", stale_session)
+        self._signaling._session_id = stale_session
+        with suppress(Exception):
+            await self._signaling.send_terminate()
+        self._signaling_session_id = None
+
+    @callback
+    def _arm_answer_watchdog(self, session_id: str, send_message: WebRTCSendMessage) -> None:
+        """Start the no-answer watchdog for an offer that was just acked."""
+        self._cancel_answer_watchdog()
+        self._answer_watchdog = self.hass.async_create_task(self._async_answer_watchdog(session_id, send_message))
+
+    @callback
+    def _cancel_answer_watchdog(self) -> None:
+        """Stop the no-answer watchdog."""
+        if self._answer_watchdog is not None and not self._answer_watchdog.done():
+            self._answer_watchdog.cancel()
+        self._answer_watchdog = None
+
+    @property
+    def answer_timeout(self) -> float:
+        """Seconds to wait for the device answer before releasing the peer slot."""
+        return ANSWER_TIMEOUT_SECONDS if self._answer_timeout is None else self._answer_timeout
+
+    async def _async_answer_watchdog(self, session_id: str, send_message: WebRTCSendMessage) -> None:
+        """Terminate the session if the device never answers the offer.
+
+        The frontend can keep a failed stream open indefinitely, and the card
+        retries several times per click.  Each unanswered offer holds one of the
+        device's few peer slots, so without this the slots run out and every
+        later stream fails with "Max number of peers reached".
+
+        The budget must outlast a legitimate answer: a live view is answered by
+        firmware in about a second, but Call Home waits for a person to reach
+        the monitor — cutting that short hangs up a call that was going fine.
+        """
+        timeout = self.answer_timeout
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+
+        if self._session_ready or self._signaling_session_id != session_id:
+            return
+
+        _LOGGER.warning(
+            "No SDP answer for session %s after %ss (module=%s); terminating to free the device peer slot",
+            session_id,
+            timeout,
+            self._module_id,
+        )
+        with suppress(Exception):
+            send_message(
+                WebRTCError(
+                    code="no_answer",
+                    message=f"Device did not answer within {timeout}s",
+                )
+            )
+        self._signaling._session_id = session_id
+        with suppress(Exception):
+            await self._signaling.send_terminate()
+        self._signaling_session_id = None
 
     async def async_on_webrtc_candidate(self, session_id: str, candidate: RTCIceCandidateInit) -> None:
         """Forward an ICE candidate from the HA frontend to the device.
@@ -825,6 +1038,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             self._module_id,
             signaling_session_id,
         )
+        self._cancel_answer_watchdog()
         self._session_ready = False
         self._pending_candidates.clear()
         self._signaling_session_id = None
@@ -838,14 +1052,32 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
 
 class BticinoCallHomeCamera(BticinoWebRTCCamera):
-    """Voice-only camera for calling the indoor intercom unit.
+    """Voice call to the indoor monitor — the app's "call home" feature.
 
-    Sends a WebRTC offer with module_id=None, which makes the bridge
-    ring the indoor unit speaker. No video — audio only.
+    The Home+Security app has no separate call-home message: it sends the same
+    `{"type": "call", "module_id": ..., "sdp": ...}` offer used for live view
+    and lets the *target module* decide what the call is. Decompiling
+    com.netatmo.camera 4.1.1.3 shows the app classifying its own outgoing call
+    purely from the product type of the module it dialled:
+
+        BNEU  (Classe 100X/300X external unit) -> Autoswitch  (live view)
+        BFIO  (IP DES external unit)           -> Autoswitch
+        BNTVCC (TVCC camera)                   -> CCTV
+        anything else                          -> CallHome
+
+    The indoor monitor is itself a module (type BNC1, "BticinoClasse100X"), and
+    it is the bridge, so dialling the bridge's own module id lands in the
+    "anything else" branch and rings the monitor.
+
+    Omitting module_id, which this entity used to do, is not the call-home
+    format: the protocol reads a missing module_id as the default external unit
+    (pybticino `docs/webrtc-signaling.md`), so it duplicated the doorbell camera
+    and fought it for the device's single peer slot.
     """
 
     _attr_name = "Call Home"
     _attr_icon = "mdi:phone-classic"
+    _answer_timeout = CALL_HOME_ANSWER_TIMEOUT_SECONDS
 
     def __init__(
         self,
@@ -858,7 +1090,9 @@ class BticinoCallHomeCamera(BticinoWebRTCCamera):
             coordinator,
             account,
             signaling_client,
-            module_id=None,
+            # Dial the bridge itself: its product type is not an external unit,
+            # which is exactly what makes the call a "call home".
+            module_id=coordinator.main_device_id,
             module_name="Call Home",
         )
         self._attr_unique_id = f"{coordinator.entry.entry_id}_call_home"
