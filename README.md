@@ -349,7 +349,7 @@ When reporting a v2.0 bug:
 
 - Home Assistant 2026.5.0 or later
 - A BTicino Classe 100X, 300X or 300 EOS, or a BTicino/Legrand EasyKit, connected to the Netatmo cloud
-- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.7.1 (installed automatically)
+- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.9.0 (installed automatically)
 
 ---
 
