@@ -1,6 +1,6 @@
 {
   "domain": "bticino_intercom",
-  "name": "BTicino Classe 100X/300X",
+  "name": "BTicino Classe 100X/300X/300 EOS",
   "after_dependencies": ["media_source"],
   "codeowners": ["@k-the-hidden-hero"],
   "config_flow": true,

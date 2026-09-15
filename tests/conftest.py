@@ -467,3 +467,92 @@ async def mock_setup_entry_light_as_lock(
         mock_websocket_client,
         mock_signaling_client,
     )
+
+
+# --- Classe 300 EOS fixtures (bridge BNCX, modules without 'variant') ---
+
+
+@pytest.fixture
+def mock_modules_data_eos() -> dict[str, Any]:
+    """Return EOS topology: bridge is BNCX and modules carry only 'type'.
+
+    Unlike the Classe 100X/300X, the Classe 300 EOS does not return a 'variant'
+    field for its modules — the raw 'type' (BNDL/BNEU/BNSL) is the only
+    discriminator available.
+    """
+    return {
+        BRIDGE_MAC: {
+            "id": BRIDGE_MAC,
+            "type": "BNCX",
+            "name": "BTicino 300 EOS",
+            "firmware_name": "2.1.0",
+            "reachable": True,
+            "uptime": 3600,
+            "wifi_strength": 70,
+            "websocket_connected": True,
+            "local_ipv4": "192.168.1.101",
+        },
+        EXTERNAL_UNIT_ID: {
+            "id": EXTERNAL_UNIT_ID,
+            "type": "BNEU",
+            "name": EXTERNAL_UNIT_NAME,
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+        },
+        DOORLOCK_ID: {
+            "id": DOORLOCK_ID,
+            "type": "BNDL",
+            "name": "Porta Esterna",
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+        },
+        STAIRCASE_LIGHT_ID: {
+            "id": STAIRCASE_LIGHT_ID,
+            "type": "BNSL",
+            "name": "Luci Scale",
+            "reachable": True,
+            "bridge": BRIDGE_MAC,
+        },
+    }
+
+
+@pytest.fixture
+def mock_account_eos(mock_modules_data_eos, mock_events_history) -> AsyncMock:
+    """Create a persistent mock AsyncAccount serving the EOS topology."""
+    return _build_account(mock_modules_data_eos, mock_events_history)
+
+
+@pytest.fixture
+def mock_config_entry_eos() -> MockConfigEntry:
+    """Create a mock config entry for an EOS home."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="BTicino 300 EOS Test",
+        data={
+            "home_id": HOME_ID,
+            "username": "test@example.com",
+            "password": "testpass",
+        },
+        unique_id=f"{HOME_ID}_eos",
+    )
+
+
+@pytest.fixture
+async def mock_setup_entry_eos(
+    hass: HomeAssistant,
+    mock_config_entry_eos: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account_eos: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
+) -> MockConfigEntry:
+    """Set up the integration with an EOS (BNCX, no-variant) topology."""
+    return await _setup_integration(
+        hass,
+        mock_config_entry_eos,
+        mock_auth_handler,
+        mock_account_eos,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
