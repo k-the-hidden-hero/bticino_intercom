@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import timedelta
 import logging
 import time
+from copy import deepcopy
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -93,10 +93,7 @@ async def async_setup_entry(
                 module_id=module.id,
             )
 
-            if (
-                isinstance(professional_studio, dict)
-                and professional_studio.get("ps_enabled") is True
-            ):
+            if isinstance(professional_studio, dict) and professional_studio.get("ps_enabled") is True:
                 key = f"{home.id}_{module.id}"
 
                 professional_studio_duration_minutes.setdefault(
@@ -151,9 +148,7 @@ class BticinoDoNotDisturbSwitch(SwitchEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information for this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator.main_device_id)}
-        )
+        return DeviceInfo(identifiers={(DOMAIN, self.coordinator.main_device_id)})
 
     @property
     def is_on(self) -> bool:
@@ -264,19 +259,12 @@ class BticinoDoNotDisturbSwitch(SwitchEntity):
     @staticmethod
     def _is_immediate_dnd(dnd_config: dict[str, Any]) -> bool:
         """Return true if config means immediate do-not-disturb."""
-        return (
-            dnd_config.get("dnd_enabled") is True
-            and dnd_config.get("dnd_mode") == 3
-        )
+        return dnd_config.get("dnd_enabled") is True and dnd_config.get("dnd_mode") == 3
 
     @staticmethod
     def _sanitize_dnd_config(dnd_config: dict[str, Any]) -> dict[str, Any]:
         """Keep only known do-not-disturb config keys."""
-        return {
-            key: value
-            for key, value in dnd_config.items()
-            if key in DND_CONFIG_KEYS
-        }
+        return {key: value for key, value in dnd_config.items() if key in DND_CONFIG_KEYS}
 
 
 class BticinoProfessionalStudioSwitch(SwitchEntity):
@@ -315,9 +303,7 @@ class BticinoProfessionalStudioSwitch(SwitchEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information for this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator.main_device_id)}
-        )
+        return DeviceInfo(identifiers={(DOMAIN, self.coordinator.main_device_id)})
 
     @property
     def is_on(self) -> bool:
@@ -344,9 +330,7 @@ class BticinoProfessionalStudioSwitch(SwitchEntity):
                 {
                     "ps_enabled": self._last_professional_studio_config.get("ps_enabled"),
                     "ps_mode": self._last_professional_studio_config.get("ps_mode"),
-                    "ps_end_time_duration": self._last_professional_studio_config.get(
-                        "ps_end_time_duration"
-                    ),
+                    "ps_end_time_duration": self._last_professional_studio_config.get("ps_end_time_duration"),
                 }
             )
 
@@ -425,9 +409,7 @@ class BticinoProfessionalStudioSwitch(SwitchEntity):
                 self.async_write_ha_state()
                 return
 
-            self._attr_is_on = self._is_professional_studio_active(
-                professional_studio
-            )
+            self._attr_is_on = self._is_professional_studio_active(professional_studio)
             self._attr_available = True
             self.async_write_ha_state()
 
@@ -464,9 +446,7 @@ class BticinoProfessionalStudioSwitch(SwitchEntity):
             home_id=self.home_id,
             module_id=self.module_id,
             module_type=self.module_type,
-            professional_studio_config=self._sanitize_professional_studio_config(
-                professional_studio_config
-            ),
+            professional_studio_config=self._sanitize_professional_studio_config(professional_studio_config),
         )
 
         if result.get("status") != "ok":
@@ -477,10 +457,7 @@ class BticinoProfessionalStudioSwitch(SwitchEntity):
         professional_studio_config: dict[str, Any],
     ) -> bool:
         """Return true if professional studio mode is active."""
-        return (
-            professional_studio_config.get("ps_enabled") is True
-            and professional_studio_config.get("ps_mode") == 1
-        )
+        return professional_studio_config.get("ps_enabled") is True and professional_studio_config.get("ps_mode") == 1
 
     @staticmethod
     def _sanitize_professional_studio_config(
@@ -488,7 +465,5 @@ class BticinoProfessionalStudioSwitch(SwitchEntity):
     ) -> dict[str, Any]:
         """Keep only known professional studio config keys."""
         return {
-            key: value
-            for key, value in professional_studio_config.items()
-            if key in PROFESSIONAL_STUDIO_CONFIG_KEYS
+            key: value for key, value in professional_studio_config.items() if key in PROFESSIONAL_STUDIO_CONFIG_KEYS
         }

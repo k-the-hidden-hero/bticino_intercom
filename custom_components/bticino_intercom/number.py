@@ -50,10 +50,7 @@ async def async_setup_entry(
                 module_id=module.id,
             )
 
-            if (
-                isinstance(professional_studio, dict)
-                and professional_studio.get("ps_enabled") is True
-            ):
+            if isinstance(professional_studio, dict) and professional_studio.get("ps_enabled") is True:
                 key = f"{home.id}_{module.id}"
 
                 professional_studio_duration_minutes.setdefault(
@@ -117,9 +114,7 @@ class BticinoProfessionalStudioDurationNumber(NumberEntity, RestoreEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information for this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator.main_device_id)}
-        )
+        return DeviceInfo(identifiers={(DOMAIN, self.coordinator.main_device_id)})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
