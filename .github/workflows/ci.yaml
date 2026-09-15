@@ -20,11 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Pinned on purpose: an unpinned ruff silently changes the formatting rules
+      # under every open PR, turning main red for reasons no author can act on.
+      # Bump this deliberately, with the reformat it implies in the same commit.
       - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.16.7"
           args: "check"
       - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.16.7"
           args: "format --check"
 
   # ---------- Security ----------
