@@ -38,13 +38,6 @@ from .const import (
 )
 from .history import EventHistoryStore
 
-# WebSocket is considered stale if no application message has been received
-# for this many seconds.  Note: _last_ws_message_time only updates on data
-# frames reaching the message callback — protocol-level WS pings do not count.
-# 300s keeps detection reasonably fast without flagging quiet-but-healthy
-# connections during idle periods.
-WS_STALE_THRESHOLD = 300  # 5 minutes
-
 # After this many consecutive transient API failures, raise UpdateFailed
 # instead of returning stale data, so entities are properly marked unavailable.
 MAX_CONSECUTIVE_TRANSIENT_ERRORS = 3
@@ -87,7 +80,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._normalized_home_name = None
         self._main_device_id = None
         self._last_ws_message_time: datetime | None = None
-        self._ws_stale = False
         self._consecutive_transient_errors = 0
         # Per-module active call sessions for retransmission dedup.
         # {"started": datetime, "last_seen": datetime,
@@ -259,18 +251,6 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             if "name" in final_data["homes"][self.home_id]:
                 self._home_name = final_data["homes"][self.home_id]["name"]
                 _LOGGER.debug("Home name set to: %s", self._home_name)
-
-            # Check WebSocket health: if we haven't received a message in a while,
-            # flag the connection as stale so the manager can force a reconnect.
-            if self._last_ws_message_time:
-                silence = (datetime.now(UTC) - self._last_ws_message_time).total_seconds()
-                if silence > WS_STALE_THRESHOLD:
-                    _LOGGER.warning(
-                        "WebSocket has been silent for %ds (threshold %ds), flagging as stale",
-                        int(silence),
-                        WS_STALE_THRESHOLD,
-                    )
-                    self._ws_stale = True
 
             # Successful update: reset transient error counter
             self._consecutive_transient_errors = 0
@@ -781,14 +761,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             raise
 
     @property
-    def ws_stale(self) -> bool:
-        """Return True if the WebSocket connection appears stale."""
-        return self._ws_stale
+    def last_ws_message_time(self) -> datetime | None:
+        """Return when the last application-level WebSocket message arrived."""
+        return self._last_ws_message_time
 
     async def _handle_websocket_message(self, message: dict[str, Any]) -> None:
         """Handle incoming WebSocket messages."""
         self._last_ws_message_time = datetime.now(UTC)
-        self._ws_stale = False
         _LOGGER.debug("Coordinator: _handle_websocket_message called with: %s", message)
         data_updated = await self._process_websocket_event(message)
 
