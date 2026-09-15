@@ -16,3 +16,6 @@ ha-dev-config/
 .superpowers/
 .claude/
 dist/
+
+# macOS
+.DS_Store
