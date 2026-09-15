@@ -6,7 +6,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/issues)
 [![License](https://img.shields.io/github/license/k-the-hidden-hero/bticino_intercom)](LICENSE)
 
-A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
+A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems, and for **BTicino/Legrand EasyKit** WiFi kits. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
 
 Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Uses a persistent WebSocket connection for real-time call notifications and periodic polling for state synchronization.
 
@@ -17,6 +17,10 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 > - iOS: [Home + Security on App Store](https://apps.apple.com/us/app/home-security/id951725393)
 >
 > If your device uses the old "BTicino Door Entry" app, it is not compatible. BTicino has announced migration to the Netatmo platform — check with BTicino support for your device's status.
+>
+> EasyKit WiFi kits (e.g. 310913, 360910) are supported as of v2.0.4. Live video on
+> EasyKit's `BDIY` bridge is not — that bridge does not send the SDP offer needed to
+> answer an incoming call (see [#72](https://github.com/k-the-hidden-hero/bticino_intercom/issues/72)).
 
 ---
 
@@ -343,9 +347,8 @@ When reporting a v2.0 bug:
 
 ## Requirements
 
-- Home Assistant 2026.3 or later
-- Home Assistant 2025.x or later (Python 3.13+)
-- A BTicino Classe 100X or 300X connected to the Netatmo cloud
+- Home Assistant 2026.5.0 or later
+- A BTicino Classe 100X or 300X, or a BTicino/Legrand EasyKit, connected to the Netatmo cloud
 - [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.7.1 (installed automatically)
 
 ---
