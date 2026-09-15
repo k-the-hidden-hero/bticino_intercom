@@ -394,3 +394,107 @@ class TestReorderMlines:
         answer = "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n"
         result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
         assert result.startswith("v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\n")
+
+
+class TestFilterVideoCodecs:
+    """Test the video codec filter that keeps the offer under the ~8 KB limit.
+
+    Above roughly 8 KB the BNC1 firmware drops its cloud connection and reboots
+    instead of answering (#74), so the offer is trimmed to H264 before sending.
+    """
+
+    OFFER = (
+        "v=0\r\n"
+        "m=audio 9 UDP/TLS/RTP/SAVPF 111 63\r\n"
+        "a=mid:0\r\n"
+        "a=rtpmap:111 opus/48000/2\r\n"
+        "a=rtpmap:63 red/48000/2\r\n"
+        "m=video 9 UDP/TLS/RTP/SAVPF 96 97 102 103 98\r\n"
+        "a=mid:1\r\n"
+        "a=rtcp-fb:* transport-cc\r\n"
+        "a=rtpmap:96 VP8/90000\r\n"
+        "a=rtcp-fb:96 nack\r\n"
+        "a=rtpmap:97 rtx/90000\r\n"
+        "a=fmtp:97 apt=96\r\n"
+        "a=rtpmap:102 H264/90000\r\n"
+        "a=rtcp-fb:102 nack pli\r\n"
+        "a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1\r\n"
+        "a=rtpmap:103 rtx/90000\r\n"
+        "a=fmtp:103 apt=102\r\n"
+        "a=rtpmap:98 VP9/90000\r\n"
+    )
+
+    @staticmethod
+    def _filter(sdp: str, **kwargs: str) -> str:
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        return BticinoWebRTCCamera._filter_video_codecs(sdp, **kwargs)
+
+    def test_only_h264_payload_types_survive_in_the_m_line(self) -> None:
+        result = self._filter(self.OFFER)
+        m_line = next(line for line in result.split("\r\n") if line.startswith("m=video"))
+        assert m_line == "m=video 9 UDP/TLS/RTP/SAVPF 102"
+
+    def test_attributes_of_dropped_payload_types_go_with_them(self) -> None:
+        result = self._filter(self.OFFER)
+        for dropped in ("a=rtpmap:96", "a=rtpmap:97", "a=rtpmap:98", "a=fmtp:97", "a=rtcp-fb:96"):
+            assert dropped not in result
+        assert "a=rtpmap:102 H264/90000" in result
+        assert "a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1" in result
+        assert "a=rtcp-fb:102 nack pli" in result
+
+    def test_wildcard_rtcp_fb_is_kept(self) -> None:
+        """`a=rtcp-fb:*` applies to every payload type, so it must survive."""
+        assert "a=rtcp-fb:* transport-cc" in self._filter(self.OFFER)
+
+    def test_audio_section_is_untouched(self) -> None:
+        """Audio is not what blows the size budget, and the mic depends on it."""
+        result = self._filter(self.OFFER)
+        lines = result.split("\r\n")
+        audio = lines[
+            lines.index("m=audio 9 UDP/TLS/RTP/SAVPF 111 63") : lines.index("m=video 9 UDP/TLS/RTP/SAVPF 102")
+        ]
+        assert audio == [
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111 63",
+            "a=mid:0",
+            "a=rtpmap:111 opus/48000/2",
+            "a=rtpmap:63 red/48000/2",
+        ]
+
+    def test_payload_types_are_never_renumbered(self) -> None:
+        """The safety property the whole approach rests on.
+
+        Only removal is performed, so the device's answer is always a subset of
+        what the browser offered and stays valid for setRemoteDescription with
+        no reverse mapping. A renumbering filter would need one.
+        """
+        result = self._filter(self.OFFER)
+        assert "a=rtpmap:102 H264/90000" in result
+        assert result.count("a=rtpmap:") == 3  # opus, red, H264 — unchanged numbers
+
+    def test_offer_without_the_kept_codec_is_left_alone(self) -> None:
+        """Better an oversized offer than one with no video the device can use."""
+        no_h264 = self.OFFER.replace("a=rtpmap:102 H264/90000", "a=rtpmap:102 AV1/90000")
+        assert self._filter(no_h264) == no_h264
+
+    def test_offer_without_a_video_section_is_left_alone(self) -> None:
+        audio_only = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n"
+        assert self._filter(audio_only) == audio_only
+
+    def test_a_full_chrome_offer_lands_under_the_limit(self) -> None:
+        """The regression that matters: 43 payload types must come out under 8 KB."""
+        padding = "".join(
+            f"a=rtpmap:{pt} Codec{pt}/90000\r\n"
+            f"a=rtcp-fb:{pt} goog-remb\r\na=rtcp-fb:{pt} transport-cc\r\n"
+            f"a=rtcp-fb:{pt} ccm fir\r\na=rtcp-fb:{pt} nack\r\na=rtcp-fb:{pt} nack pli\r\n"
+            f"a=fmtp:{pt} level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f\r\n"
+            for pt in range(104, 147)
+        )
+        pts = " ".join(str(pt) for pt in range(104, 147))
+        bloated = self.OFFER.replace(
+            "m=video 9 UDP/TLS/RTP/SAVPF 96 97 102 103 98\r\n",
+            f"m=video 9 UDP/TLS/RTP/SAVPF 96 97 102 103 98 {pts}\r\n",
+        ).replace("a=rtpmap:98 VP9/90000\r\n", "a=rtpmap:98 VP9/90000\r\n" + padding)
+
+        assert len(bloated) > 8000
+        assert len(self._filter(bloated)) < 8000

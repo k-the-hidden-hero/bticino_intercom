@@ -501,8 +501,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         keep_pts = {
             match.group(1)
             for line in section
-            if (match := re.match(r"a=rtpmap:(\d+) ([^/]+)/", line))
-            and match.group(2).upper() == keep.upper()
+            if (match := re.match(r"a=rtpmap:(\d+) ([^/]+)/", line)) and match.group(2).upper() == keep.upper()
         }
         if not keep_pts:
             _LOGGER.warning("No %s payload type in offer, leaving SDP untouched", keep)
@@ -521,7 +520,10 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         result = "\r\n".join(lines[:start] + filtered + lines[end:])
         _LOGGER.debug(
             "Filtered video codecs to %s: %d -> %d bytes (%d payload types)",
-            keep, len(sdp), len(result), len(keep_pts),
+            keep,
+            len(sdp),
+            len(result),
+            len(keep_pts),
         )
         return result
 
