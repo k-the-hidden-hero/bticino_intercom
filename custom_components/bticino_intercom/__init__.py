@@ -408,7 +408,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         hass.config_entries.async_schedule_reload(entry.entry_id)
                         break
 
-                    jitter = random.uniform(0, base_delay * RECONNECT_JITTER_RATIO)
+                    # Reconnect jitter spreads clients over time; it guards
+                    # nothing and needs no cryptographic strength.
+                    jitter = random.uniform(0, base_delay * RECONNECT_JITTER_RATIO)  # nosec B311
                     delay = base_delay + jitter
 
                     _LOGGER.info(

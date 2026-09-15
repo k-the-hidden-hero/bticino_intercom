@@ -16,6 +16,7 @@ from custom_components.bticino_intercom.const import (
     CALL_RETRANSMIT_WINDOW,
     CALL_SESSION_MAX_DURATION,
     DATA_LAST_EVENT,
+    EVENT_CALL,
     EVENT_TYPE_ACCEPTED_CALL,
     EVENT_TYPE_ANSWERED_ELSEWHERE,
     EVENT_TYPE_INCOMING_CALL,
@@ -28,7 +29,14 @@ from custom_components.bticino_intercom.coordinator import (
     BticinoIntercomCoordinator,
 )
 
-from .conftest import BRIDGE_MAC, DOORLOCK_ID, EXTERNAL_UNIT_ID, HOME_ID, SESSION_ID
+from .conftest import (
+    BRIDGE_MAC,
+    DOORLOCK_ID,
+    EXTERNAL_UNIT_2_ID,
+    EXTERNAL_UNIT_ID,
+    HOME_ID,
+    SESSION_ID,
+)
 
 # =============================================================================
 # Format A: RTC events
@@ -900,3 +908,101 @@ class TestPartialTopologyCarryForward:
 
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
+
+
+# =============================================================================
+# Status pushes without a preceding RTC offer (issues #67, #58)
+# =============================================================================
+
+
+class TestStatusPushWithoutRtcOffer:
+    """Bridges that never send an RTC offer must still drive the call entities.
+
+    BDIY and BNCX report ``incoming_call`` and nothing else, so ``_active_call``
+    stays empty. The dispatch used to be guarded on it, which left
+    binary_sensor and event silent while only the sensor updated — exactly the
+    recorder evidence in #67.
+    """
+
+    @staticmethod
+    def _single_external_unit(coordinator: BticinoIntercomCoordinator) -> None:
+        """Drop the fixture's second unit so the calling module is unambiguous."""
+        del coordinator.data["modules"][EXTERNAL_UNIT_2_ID]
+
+    async def test_incoming_call_dispatches_on_signal_for_the_only_external_unit(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """With one external unit and no active call, the signal still fires."""
+        self._single_external_unit(coordinator)
+        assert coordinator._active_call is None
+
+        signals = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            await coordinator._process_websocket_event(ws_incoming_call)
+
+        assert (True, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
+
+    async def test_missed_call_dispatches_off_signal_for_the_only_external_unit(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_missed_call: dict,
+    ) -> None:
+        """The turn-off path resolves the unit the same way."""
+        self._single_external_unit(coordinator)
+
+        signals = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            await coordinator._process_websocket_event(ws_missed_call)
+
+        assert (False, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
+
+    async def test_several_external_units_dispatch_nothing(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """Nothing in the push says which unit rang, so guess nothing."""
+        assert coordinator._active_call is None
+
+        signals = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            await coordinator._process_websocket_event(ws_incoming_call)
+
+        assert signals == []
+
+    async def test_active_call_wins_and_is_not_re_announced(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """When an offer did arrive it stays authoritative for attribution.
+
+        It has already dispatched the signal, so the push must not send it
+        again — that would only restart the binary_sensor's auto-off timer.
+        """
+        self._single_external_unit(coordinator)
+        coordinator._active_call = {"module_id": DOORLOCK_ID, "session_id": SESSION_ID}
+
+        signals = []
+        events = []
+        coordinator.hass.bus.async_listen(EVENT_CALL, lambda event: events.append(event.data))
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            await coordinator._process_websocket_event(ws_incoming_call)
+        await coordinator.hass.async_block_till_done()
+
+        assert signals == []
+        assert [event["module_id"] for event in events] == [DOORLOCK_ID]

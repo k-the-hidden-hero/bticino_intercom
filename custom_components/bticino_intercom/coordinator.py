@@ -34,6 +34,7 @@ from .const import (
     EVENT_TYPE_MISSED_CALL,
     EVENT_TYPE_TERMINATED,
     SIGNAL_CALL_RECEIVED,
+    SUBTYPE_EXTERNAL_UNIT,
     UPDATE_INTERVAL,
 )
 from .history import EventHistoryStore
@@ -538,6 +539,44 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         return False
 
+    def _resolve_calling_module(self) -> str | None:
+        """Return the external unit a status push refers to, if it can be known.
+
+        Status pushes carry the bridge MAC in ``device_id``, never the module id
+        of the unit that actually rang, so the calling module is normally taken
+        from the active call recorded by a preceding RTC offer.
+
+        Some bridges never send that offer — BDIY and BNCX report the
+        incoming_call push and nothing else — leaving ``_active_call`` empty. In
+        that case fall back to the home's external unit, but only when there is
+        exactly one: with several units the push carries nothing that says which
+        one rang, and turning on the wrong doorbell is worse than leaving the
+        entities alone.
+        """
+        if self._active_call and (active_module_id := self._active_call.get("module_id")):
+            return active_module_id
+
+        external_units = [
+            module_id
+            for module_id, module_data in self.data.get("modules", {}).items()
+            if SUBTYPE_EXTERNAL_UNIT in (module_data.get("variant") or "")
+        ]
+        if len(external_units) == 1:
+            _LOGGER.debug(
+                "No active call recorded; attributing the status push to the only external unit %s",
+                external_units[0],
+            )
+            return external_units[0]
+
+        if external_units:
+            _LOGGER.warning(
+                "No active call recorded and %d external units present (%s); "
+                "cannot tell which one rang, leaving call entities untouched",
+                len(external_units),
+                ", ".join(external_units),
+            )
+        return None
+
     async def _process_status_event(
         self,
         message: dict[str, Any],
@@ -591,8 +630,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     "vignette_url": vignette_url,
                 }
 
-            calling_module_id = self._active_call.get("module_id") if self._active_call else None
+            # Whether an RTC offer preceded this push decides who has already
+            # announced the ring: the offer path dispatches the signal itself,
+            # so re-sending it there would only restart the auto-off timer.
+            announced_by_rtc_offer = bool(self._active_call)
+            calling_module_id = self._resolve_calling_module()
             if calling_module_id:
+                if not announced_by_rtc_offer:
+                    # No offer arrived, so this push is the only notice of the
+                    # ring we will get — without this the binary_sensor and the
+                    # event entity never fire at all (#67, #58).
+                    async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
                 self._fire_call_event(
                     "ring",
                     calling_module_id,
@@ -610,9 +658,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if event_type == "missed_call":
             _LOGGER.info("Missed call for %s", device_name)
 
-            # Turn off binary sensor — use the calling module from active call if available,
-            # since device_id here is the bridge MAC, not the external unit module_id
-            calling_module = self._active_call.get("module_id") if self._active_call else None
+            # Turn off binary sensor — device_id here is the bridge MAC, not the
+            # external unit module_id, so resolve the unit that rang.
+            calling_module = self._resolve_calling_module()
             if calling_module:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module)
             self._active_call = None
