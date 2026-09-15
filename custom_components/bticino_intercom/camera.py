@@ -411,8 +411,27 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     # Methods:
     # - _enable_audio_sendrecv():      browser offer → device (recvonly → sendrecv)
     # - _inject_audio_ssrc():          browser offer → device (add synthetic sender SSRC)
+    # - _filter_video_codecs():        browser offer → device (H264 only; size limit)
     # - _fix_answer_audio_direction(): device answer → browser (sendrecv → sendonly)
+    # - _align_answer_with_offer():    device answer → browser (restore missing m-sections)
     # - convert_offer_to_answer_sdp(): DTLS role for answer mode (actpass → active)
+    #
+    # Two more rewrites, each with its own consequence:
+    #
+    # _filter_video_codecs() trims the offer to H264 because above ~8 KB of SDP
+    # the firmware drops off the cloud and reboots (#74). It only removes
+    # payload types, never renumbers them, so the device's answer stays a subset
+    # of the browser's original offer and needs no reverse mapping. Consequence:
+    # rtx is dropped with everything else, so lost video packets are not
+    # retransmitted — a robustness cost accepted to stop rebooting the hardware.
+    #
+    # _align_answer_with_offer() rebuilds m-sections the device left out, as
+    # rejected sections (port 0 + a=inactive). RFC 8829 requires one answer
+    # section per offered section, in order; the indoor monitor has no camera,
+    # so its Call Home answer carries audio only and Chrome refuses the lot.
+    # It is aligned against the *browser's* offer, captured before any of the
+    # rewrites above — the answer has to match what the browser sent, not the
+    # copy that went to the device.
 
     @staticmethod
     def _enable_audio_sendrecv(sdp: str) -> str:
