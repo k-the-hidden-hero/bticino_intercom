@@ -21,6 +21,7 @@ from homeassistant.core import (
     CoreState,  # Re-add CoreState for check
     HomeAssistant,
     ServiceCall,
+    callback,
 )
 from homeassistant.core import (
     Event as HAEvent,  # Re-add HAEvent type hint
@@ -414,12 +415,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Schedule the WebSocket start — always deferred to avoid running during setup
     if hass.state == CoreState.running:
         _LOGGER.debug("Home Assistant already running, scheduling WebSocket manager via call_later.")
-        entry.async_on_unload(
-            hass.async_create_task(
-                _deferred_start_websocket(hass, entry, _async_start_websocket_manager),
-                f"{DOMAIN} deferred WS start - {entry.entry_id}",
-            ).cancel
+        deferred_ws_task = hass.async_create_task(
+            _deferred_start_websocket(hass, entry, _async_start_websocket_manager),
+            f"{DOMAIN} deferred WS start - {entry.entry_id}",
         )
+
+        @callback
+        def _cancel_deferred_ws_task() -> None:
+            """Cancel the deferred WS start task on unload.
+
+            Registering ``task.cancel`` directly is unsafe: it returns a bool,
+            and HA awaits any non-None return from an on_unload callback,
+            raising "a coroutine was expected, got True" — which fails the
+            unload and leaves the entry stuck in ``failed_unload`` (every
+            entity unavailable until a full HA restart). This wrapper returns
+            None so unload — and therefore reload — succeeds.
+            """
+            deferred_ws_task.cancel()
+
+        entry.async_on_unload(_cancel_deferred_ws_task)
         start_listener_remove = None
     else:
         _LOGGER.debug("Home Assistant starting, scheduling WebSocket manager via listener.")

@@ -15,7 +15,7 @@ from homeassistant.components.lock import LockState
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pybticino.exceptions import ApiError
@@ -348,6 +348,49 @@ async def test_unload_and_reload(
     # Entities should be available again
     for lock_id in hass.states.async_entity_ids(LOCK_DOMAIN):
         assert hass.states.get(lock_id).state != "unavailable"
+
+
+async def test_unload_after_running_setup_does_not_fail(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+) -> None:
+    """Unloading after a setup done while HA is running must succeed.
+
+    Regression test: when the entry is set up with hass already running (the
+    reload path), the deferred WebSocket-start task's cleanup is registered via
+    entry.async_on_unload. Registering ``task.cancel`` directly returns a bool,
+    which HA awaits during unload, raising "a coroutine was expected, got True"
+    and leaving the entry stuck in ``failed_unload`` (every entity unavailable
+    until a full restart). The cleanup must be a callback returning None.
+    """
+    # Start from a clean unload of the fixture-loaded entry.
+    assert await hass.config_entries.async_unload(mock_setup_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Re-setup while hass is running -> exercises the CoreState.running branch
+    # that registers the deferred WS-start cleanup on the entry.
+    hass.set_state(CoreState.running)
+    with (
+        patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
+        patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
+        patch("custom_components.bticino_intercom.Store") as mock_store_cls,
+    ):
+        mock_store_cls.return_value.async_load = AsyncMock(return_value=None)
+        mock_store_cls.return_value.async_save = AsyncMock()
+        assert await hass.config_entries.async_setup(mock_setup_entry.entry_id)
+        await hass.async_block_till_done()
+    assert mock_setup_entry.state is ConfigEntryState.LOADED
+
+    # The unload that used to break: must succeed cleanly (no failed_unload).
+    assert await hass.config_entries.async_unload(mock_setup_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_setup_entry.state is ConfigEntryState.NOT_LOADED
 
 
 async def test_options_change_triggers_reload(
