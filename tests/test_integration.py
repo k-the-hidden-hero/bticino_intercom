@@ -37,13 +37,33 @@ from .conftest import BRIDGE_MAC, EXT_UNIT_MODULE_ID, LIGHT_MODULE_ID, LOCK_MODU
 # ---------------------------------------------------------------------------
 
 
+def _bridge_device(
+    device_reg: dr.DeviceRegistry,
+    entry_id: str,
+) -> dr.DeviceEntry | None:
+    """Return the bridge device for the config entry.
+
+    Looked up by walking the entry's devices rather than via
+    `device_registry.async_get_device`, which recent Home Assistant cores reject
+    outright because identifiers are no longer unique across config entries.
+    """
+    return next(
+        (
+            device
+            for device in dr.async_entries_for_config_entry(device_reg, entry_id)
+            if (DOMAIN, BRIDGE_MAC) in device.identifiers
+        ),
+        None,
+    )
+
+
 async def test_device_registry_bridge_created(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,
 ) -> None:
     """Test that the bridge device is registered in the device registry."""
     device_reg = dr.async_get(hass)
-    device = device_reg.async_get_device(identifiers={(DOMAIN, BRIDGE_MAC)})
+    device = _bridge_device(device_reg, mock_setup_entry.entry_id)
 
     assert device is not None
     assert device.manufacturer == "BTicino"
@@ -76,7 +96,7 @@ async def test_all_entities_share_bridge_device(
     device_reg = dr.async_get(hass)
     entity_reg = er.async_get(hass)
 
-    bridge_device = device_reg.async_get_device(identifiers={(DOMAIN, BRIDGE_MAC)})
+    bridge_device = _bridge_device(device_reg, mock_setup_entry.entry_id)
     assert bridge_device is not None
 
     entries = er.async_entries_for_config_entry(entity_reg, mock_setup_entry.entry_id)
