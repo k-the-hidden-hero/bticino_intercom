@@ -679,6 +679,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 EVENT_LOGBOOK_MISSED_CALL,
                 {"name": f"Missed Call ({device_name})", "module_id": device_id},
             )
+            await self._close_history_event(extra_params.get("session_id"), EVENT_TYPE_MISSED_CALL)
             return True
 
         if event_type == "accepted_call":
@@ -701,6 +702,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 EVENT_LOGBOOK_ACCEPTED_CALL,
                 {"name": f"Call Accepted ({device_name})", "module_id": device_id},
             )
+            # Without this the record keeps the "incoming_call" it was created
+            # with, and every answered call still reads as missed in the history.
+            await self._close_history_event(extra_params.get("session_id"), EVENT_TYPE_ANSWERED_ELSEWHERE)
             return True
 
         return False

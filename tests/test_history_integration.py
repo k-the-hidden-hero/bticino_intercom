@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bticino_intercom.const import DOMAIN
 
-from .conftest import EXT_UNIT_MODULE_ID, HOME_ID
+from .conftest import BRIDGE_MAC, EXT_UNIT_MODULE_ID, HOME_ID
 
 
 async def test_incoming_call_push_calls_history_record(
@@ -180,3 +180,69 @@ async def test_history_disabled_skips_recording(
         }
     )
     await hass.async_block_till_done()
+
+
+async def test_accepted_call_push_marks_the_record_answered(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """A call answered on the intercom must stop reading as missed.
+
+    The record is created as ``incoming_call`` when the call arrives. Only the
+    rtc rescind/terminate paths used to close it, so answering on the monitor
+    left the record untouched and the whole history showed "Missed".
+    """
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+    assert coordinator.history is not None
+
+    mock_close = AsyncMock()
+    coordinator.history.async_close_call = mock_close
+
+    updated = await coordinator._process_websocket_event(
+        {
+            "push_type": "BNC1-accepted_call",
+            "extra_params": {
+                "event_type": "accepted_call",
+                "device_id": BRIDGE_MAC,
+                "home_id": HOME_ID,
+                "session_id": "sess-answered",
+            },
+        }
+    )
+    await hass.async_block_till_done()
+
+    assert updated is True
+    mock_close.assert_awaited_once()
+    assert mock_close.call_args.kwargs == {
+        "event_id": "sess-answered",
+        "event_type": "answered_elsewhere",
+    }
+
+
+async def test_missed_call_push_closes_the_record_as_missed(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """A genuinely missed call is closed explicitly, instead of being left as an
+    open ``incoming_call`` record that only looks missed by default."""
+    coordinator = hass.data[DOMAIN][mock_setup_entry.entry_id]["coordinator"]
+    assert coordinator.history is not None
+
+    mock_close = AsyncMock()
+    coordinator.history.async_close_call = mock_close
+
+    await coordinator._process_websocket_event(
+        {
+            "push_type": "BNC1-missed_call",
+            "extra_params": {
+                "event_type": "missed_call",
+                "device_id": BRIDGE_MAC,
+                "home_id": HOME_ID,
+                "session_id": "sess-missed",
+            },
+        }
+    )
+    await hass.async_block_till_done()
+
+    mock_close.assert_awaited_once()
+    assert mock_close.call_args.kwargs["event_type"] == "missed_call"
