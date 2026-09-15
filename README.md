@@ -6,7 +6,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/k-the-hidden-hero/bticino_intercom)](https://github.com/k-the-hidden-hero/bticino_intercom/issues)
 [![License](https://img.shields.io/github/license/k-the-hidden-hero/bticino_intercom)](LICENSE)
 
-A Home Assistant custom integration for **BTicino Classe 100X and 300X** video intercom systems, and for **BTicino/Legrand EasyKit** WiFi kits. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
+A Home Assistant custom integration for **BTicino Classe 100X, 300X and 300 EOS** video intercom systems, and for **BTicino/Legrand EasyKit** WiFi kits. Monitor calls, control door locks, manage staircase lights, stream live video, and talk back — all from your Home Assistant dashboard.
 
 Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://github.com/k-the-hidden-hero/pybticino) library. Uses a persistent WebSocket connection for real-time call notifications and periodic polling for state synchronization.
 
@@ -348,7 +348,7 @@ When reporting a v2.0 bug:
 ## Requirements
 
 - Home Assistant 2026.5.0 or later
-- A BTicino Classe 100X or 300X, or a BTicino/Legrand EasyKit, connected to the Netatmo cloud
+- A BTicino Classe 100X, 300X or 300 EOS, or a BTicino/Legrand EasyKit, connected to the Netatmo cloud
 - [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.7.1 (installed automatically)
 
 ---
