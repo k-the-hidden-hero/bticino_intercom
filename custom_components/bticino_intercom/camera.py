@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -471,6 +472,62 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         return "\r\n".join(result)
 
     @staticmethod
+    def _filter_video_codecs(sdp: str, keep: str = "H264") -> str:
+        """Strip every video codec except `keep` from the outgoing offer.
+
+        The BNC1/BNDL firmware drops its cloud connection and reboots when the
+        offer SDP exceeds roughly 8 KB. A modern Chrome offers 43 video payload
+        types (VP8, VP9, AV1, H265, rtx, red, ulpfec, flexfec); together with an
+        audio m-section that pushes the offer past 9.5 KB. Keeping only H264 —
+        the sole codec these devices decode — brings it back to ~6.3 KB.
+
+        Only removal is performed, never renumbering, so the device's answer is
+        always a subset of what the browser originally offered and remains valid
+        for setRemoteDescription without any reverse mapping.
+        """
+        lines = sdp.split("\r\n")
+        try:
+            start = next(i for i, line in enumerate(lines) if line.startswith("m=video"))
+        except StopIteration:
+            return sdp
+
+        end = len(lines)
+        for i in range(start + 1, len(lines)):
+            if lines[i].startswith("m="):
+                end = i
+                break
+
+        section = lines[start:end]
+        keep_pts = {
+            match.group(1)
+            for line in section
+            if (match := re.match(r"a=rtpmap:(\d+) ([^/]+)/", line)) and match.group(2).upper() == keep.upper()
+        }
+        if not keep_pts:
+            _LOGGER.warning("No %s payload type in offer, leaving SDP untouched", keep)
+            return sdp
+
+        header = section[0].split()
+        section[0] = " ".join(header[:3] + [pt for pt in header[3:] if pt in keep_pts])
+
+        filtered = [section[0]]
+        for line in section[1:]:
+            match = re.match(r"a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\b", line)
+            if match and match.group(1) not in keep_pts:
+                continue
+            filtered.append(line)
+
+        result = "\r\n".join(lines[:start] + filtered + lines[end:])
+        _LOGGER.debug(
+            "Filtered video codecs to %s: %d -> %d bytes (%d payload types)",
+            keep,
+            len(sdp),
+            len(result),
+            len(keep_pts),
+        )
+        return result
+
+    @staticmethod
     def _fix_answer_audio_direction(answer_sdp: str) -> str:
         """Rewrite audio direction in the device's answer for browser compatibility.
 
@@ -660,6 +717,15 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
             # Inject synthetic audio SSRC — the device needs a sender endpoint
             offer_sdp = self._inject_audio_ssrc(offer_sdp)
+
+            # Keep the offer under the firmware's ~8 KB SDP limit. Above it the
+            # device drops off the cloud and reboots instead of answering.
+            offer_sdp = self._filter_video_codecs(offer_sdp)
+            if len(offer_sdp) > 8000:
+                _LOGGER.warning(
+                    "Offer SDP is %d bytes; the device may drop the connection above ~8 KB",
+                    len(offer_sdp),
+                )
 
             active_call = self.coordinator.active_call
             if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
