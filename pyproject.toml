@@ -1,11 +1,15 @@
 [project]
 name = "bticino_intercom"
-version = "1.7.3"
+version = "2.0.2"
 requires-python = ">=3.14"
 
 [tool.ruff]
 target-version = "py313"
 line-length = 120
+# ruff >=0.16 formats fenced code blocks inside Markdown too. The files under
+# docs/ are prose, not sources, and reformatting their snippets only creates
+# churn, so they stay out of both check and format.
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = [
