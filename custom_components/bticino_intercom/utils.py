@@ -3,17 +3,38 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.dt import utc_from_timestamp
+
+from .const import SUBTYPE_DOORLOCK, SUBTYPE_EXTERNAL_UNIT, SUBTYPE_STAIRCASE_LIGHT
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity import Entity
 
 _LOGGER = logging.getLogger(__name__)
+
+_MODULE_TYPE_TO_SUBTYPE = {
+    "BNEU": SUBTYPE_EXTERNAL_UNIT,
+    "BNDL": SUBTYPE_DOORLOCK,
+    "BNSL": SUBTYPE_STAIRCASE_LIGHT,
+}
+
+
+def get_module_subtype(module_data: Mapping[str, Any]) -> str | None:
+    """Return a module subtype from its variant or its known module type."""
+    variant = module_data.get("variant")
+    if isinstance(variant, str):
+        _, separator, subtype = variant.partition(":")
+        if separator and subtype:
+            return subtype
+
+    module_type = module_data.get("type")
+    return _MODULE_TYPE_TO_SUBTYPE.get(module_type) if isinstance(module_type, str) else None
 
 
 def format_timestamp_iso(timestamp: int | float | datetime | None) -> str | None:
