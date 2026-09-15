@@ -964,6 +964,36 @@ class TestStatusPushWithoutRtcOffer:
 
         assert (False, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
 
+    async def test_easykit_module_without_a_variant_still_resolves(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """EasyKit reports a module `type` and no `variant` at all.
+
+        Resolving on the raw variant string made this fallback a silent no-op on
+        exactly the BDIY hardware it was written for (#72), so it goes through
+        get_module_subtype, which falls back to the type.
+        """
+        modules = coordinator.data["modules"]
+        del modules[EXTERNAL_UNIT_2_ID]
+        modules[EXTERNAL_UNIT_ID] = {
+            "id": EXTERNAL_UNIT_ID,
+            "type": "BNEU",
+            "name": "EasyKit panel",
+            "reachable": True,
+        }
+        assert "variant" not in modules[EXTERNAL_UNIT_ID]
+
+        signals = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            await coordinator._process_websocket_event(ws_incoming_call)
+
+        assert (True, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
+
     async def test_several_external_units_dispatch_nothing(
         self,
         coordinator: BticinoIntercomCoordinator,

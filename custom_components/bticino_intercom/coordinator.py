@@ -38,6 +38,7 @@ from .const import (
     UPDATE_INTERVAL,
 )
 from .history import EventHistoryStore
+from .utils import get_module_subtype
 
 # After this many consecutive transient API failures, raise UpdateFailed
 # instead of returning stale data, so entities are properly marked unavailable.
@@ -552,6 +553,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         exactly one: with several units the push carries nothing that says which
         one rang, and turning on the wrong doorbell is worse than leaving the
         entities alone.
+
+        The unit is identified through ``get_module_subtype``, not the raw
+        ``variant`` field: EasyKit modules report a ``type`` and no variant at
+        all, and those are exactly the installations this fallback exists for.
         """
         if self._active_call and (active_module_id := self._active_call.get("module_id")):
             return active_module_id
@@ -559,7 +564,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         external_units = [
             module_id
             for module_id, module_data in self.data.get("modules", {}).items()
-            if SUBTYPE_EXTERNAL_UNIT in (module_data.get("variant") or "")
+            if get_module_subtype(module_data) == SUBTYPE_EXTERNAL_UNIT
         ]
         if len(external_units) == 1:
             _LOGGER.debug(
