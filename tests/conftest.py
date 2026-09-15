@@ -295,32 +295,49 @@ def mock_auth_handler() -> AsyncMock:
     return mock_auth
 
 
-@pytest.fixture
-def mock_account(mock_modules_data, mock_events_history) -> AsyncMock:
-    """Create a persistent mock AsyncAccount."""
+def _build_account(modules_data: dict[str, Any], events_history: list[dict[str, Any]]) -> AsyncMock:
+    """Build a mock AsyncAccount for a given topology."""
     mock_acct = AsyncMock()
     mock_acct.homes = {
         HOME_ID: MagicMock(
             id=HOME_ID,
             name="Test Home",
             raw_data={"name": "Test Home", "id": HOME_ID},
-            modules=[MagicMock(id=mid, raw_data=mdata) for mid, mdata in mock_modules_data.items()],
+            modules=[MagicMock(id=mid, raw_data=mdata) for mid, mdata in modules_data.items()],
         )
     }
     mock_acct.async_update_topology = AsyncMock()
     mock_acct.async_get_home_status = AsyncMock(
         return_value={
-            "body": {"home": {"modules": list(mock_modules_data.values())}},
+            "body": {"home": {"modules": list(modules_data.values())}},
         }
     )
     mock_acct.async_get_events = AsyncMock(
         return_value={
-            "body": {"home": {"events": mock_events_history}},
+            "body": {"home": {"events": events_history}},
         }
     )
     mock_acct.async_get_turn_servers = AsyncMock(return_value=[])
     mock_acct.async_set_module_state = AsyncMock()
     return mock_acct
+
+
+@pytest.fixture
+def mock_account(mock_modules_data, mock_events_history) -> AsyncMock:
+    """Create a persistent mock AsyncAccount."""
+    return _build_account(mock_modules_data, mock_events_history)
+
+
+@pytest.fixture
+def mock_modules_data_voice_only(mock_modules_data: dict[str, Any]) -> dict[str, Any]:
+    """Topology of a voice-only intercom: bridge and lock, no BNEU external unit."""
+    return {mid: mdata for mid, mdata in mock_modules_data.items() if mdata["type"] != "BNEU"}
+
+
+@pytest.fixture
+def mock_account_voice_only(mock_modules_data_voice_only, mock_events_history) -> AsyncMock:
+    """Mock AsyncAccount for a voice-only intercom."""
+    return _build_account(mock_modules_data_voice_only, mock_events_history)
 
 
 @pytest.fixture
@@ -389,6 +406,27 @@ async def mock_setup_entry(
         mock_config_entry,
         mock_auth_handler,
         mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
+
+
+@pytest.fixture
+async def mock_setup_entry_voice_only(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account_voice_only: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    enable_custom_integrations: None,
+) -> MockConfigEntry:
+    """Set up the integration for a voice-only intercom (no external unit)."""
+    return await _setup_integration(
+        hass,
+        mock_config_entry,
+        mock_auth_handler,
+        mock_account_voice_only,
         mock_websocket_client,
         mock_signaling_client,
     )
