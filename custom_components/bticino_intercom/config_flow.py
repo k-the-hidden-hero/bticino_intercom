@@ -16,6 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pybticino import AsyncAccount, AuthHandler
 from pybticino.exceptions import ApiError, AuthError
 
+from .auth import async_clear_tokens
 from .const import (
     DOMAIN,
     HISTORY_DEFAULT_MAX_EVENTS,
@@ -183,6 +184,7 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
                 )
+                await async_clear_tokens(self.hass, self._reauth_entry)
                 await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
                 return self.async_abort(reason="reauth_successful")
 
