@@ -40,6 +40,7 @@ from .const import (
 from .coordinator import BticinoIntercomCoordinator
 from .history import EventHistoryStore, get_history_options
 from .media_source import BticinoHistoryImageView
+from .websocket_api import async_register_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data.get(HISTORY_VIEW_FLAG):
         hass.http.register_view(BticinoHistoryImageView())
         hass.data[HISTORY_VIEW_FLAG] = True
+
+    # Serve the call log as data, for cards that want to show it.
+    async_register_websocket_api(hass)
 
     # Fetch initial data using the coordinator's standard method
     try:
