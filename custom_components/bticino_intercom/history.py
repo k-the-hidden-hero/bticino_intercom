@@ -179,7 +179,14 @@ class EventHistoryStore:
                     "snapshot_file": None,
                     "vignette_file": None,
                 }
-                self._events.insert(0, record)
+                # Keep the list newest-first by timestamp, not by arrival:
+                # a call backfilled from polling can be older than one that
+                # arrived by push after it, and the cameras read index 0.
+                index = next(
+                    (i for i, e in enumerate(self._events) if (e.get("timestamp") or 0) <= record["timestamp"]),
+                    len(self._events),
+                )
+                self._events.insert(index, record)
             else:
                 if module_name and not record.get("module_name"):
                     record["module_name"] = module_name

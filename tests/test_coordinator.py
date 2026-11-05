@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -568,6 +568,103 @@ class TestCloseHistoryEvent:
         coordinator.history = mock_history
         await coordinator._close_history_event("sess-123", EVENT_TYPE_TERMINATED)
         mock_history.async_close_call.assert_awaited_once_with(event_id="sess-123", event_type=EVENT_TYPE_TERMINATED)
+
+
+def _polled_call(subtype: str, *, session_id: str = SESSION_ID, age: timedelta = timedelta(minutes=5)) -> dict:
+    """Build a call event as returned by getevents, ``age`` before now."""
+    ts = int((datetime.now(UTC) - age).timestamp())
+    return {
+        "type": "outdoor",
+        "time": ts,
+        "module_id": BRIDGE_MAC,
+        "subevents": [
+            {
+                "type": subtype,
+                "time": ts + 4,
+                "session_id": session_id,
+                "snapshot": {"url": "https://example.com/snap.jpg", "expires_at": ts + 86400},
+                "vignette": {"url": "https://example.com/vig.jpg", "expires_at": ts + 86400},
+            }
+        ],
+    }
+
+
+class TestBackfillHistory:
+    """Calls the push never delivered are recorded from polled events (#99)."""
+
+    @pytest.fixture
+    def history(self, coordinator: BticinoIntercomCoordinator) -> MagicMock:
+        """Install a mock history store that holds no events."""
+        mock_history = MagicMock()
+        mock_history.get_event.return_value = None
+        mock_history.async_record_call = AsyncMock()
+        mock_history.async_close_call = AsyncMock()
+        coordinator.history = mock_history
+        return mock_history
+
+    async def test_records_and_closes_missed_push(
+        self, coordinator: BticinoIntercomCoordinator, history: MagicMock
+    ) -> None:
+        """A call the push never delivered is recorded with its images and closed as answered."""
+        event = _polled_call(EVENT_TYPE_ACCEPTED_CALL)
+        await coordinator._backfill_history([event], {BRIDGE_MAC: {"name": "Classe 100X16E"}})
+
+        history.async_record_call.assert_awaited_once_with(
+            event_id=SESSION_ID,
+            module_id=BRIDGE_MAC,
+            module_name="Classe 100X16E",
+            snapshot_url="https://example.com/snap.jpg",
+            vignette_url="https://example.com/vig.jpg",
+            event_timestamp=event["time"],
+        )
+        history.async_close_call.assert_awaited_once_with(
+            event_id=SESSION_ID,
+            event_type=EVENT_TYPE_ANSWERED_ELSEWHERE,
+            ended_at=event["time"] + 4,
+        )
+
+    async def test_missed_call_closes_as_terminated(
+        self, coordinator: BticinoIntercomCoordinator, history: MagicMock
+    ) -> None:
+        """A missed call is closed as terminated, not answered."""
+        await coordinator._backfill_history([_polled_call(EVENT_TYPE_MISSED_CALL)], {})
+
+        assert history.async_close_call.await_args.kwargs["event_type"] == EVENT_TYPE_TERMINATED
+
+    async def test_skips_call_already_recorded_by_push(
+        self, coordinator: BticinoIntercomCoordinator, history: MagicMock
+    ) -> None:
+        """A call the push already recorded is not recorded twice."""
+        history.get_event.return_value = {"event_id": SESSION_ID}
+        await coordinator._backfill_history([_polled_call(EVENT_TYPE_ACCEPTED_CALL)], {})
+
+        history.async_record_call.assert_not_awaited()
+        history.async_close_call.assert_not_awaited()
+
+    async def test_skips_in_progress_and_non_call_events(
+        self, coordinator: BticinoIntercomCoordinator, history: MagicMock
+    ) -> None:
+        """Calls still ringing (the push may yet arrive) and non-call events are left alone."""
+        events = [
+            _polled_call(EVENT_TYPE_INCOMING_CALL),
+            {"type": "connection", "time": int(datetime.now(UTC).timestamp()), "module_id": BRIDGE_MAC},
+        ]
+        await coordinator._backfill_history(events, {})
+
+        history.async_record_call.assert_not_awaited()
+
+    async def test_skips_calls_older_than_retention(
+        self, coordinator: BticinoIntercomCoordinator, history: MagicMock
+    ) -> None:
+        """Calls outside the retention window are not downloaded only to be purged."""
+        await coordinator._backfill_history([_polled_call(EVENT_TYPE_ACCEPTED_CALL, age=timedelta(days=31))], {})
+
+        history.async_record_call.assert_not_awaited()
+
+    async def test_noop_without_history(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """Should not crash when history is disabled."""
+        coordinator.history = None
+        await coordinator._backfill_history([_polled_call(EVENT_TYPE_ACCEPTED_CALL)], {})
 
 
 class TestUpdateLastEvent:

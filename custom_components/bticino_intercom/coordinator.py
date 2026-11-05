@@ -33,6 +33,8 @@ from .const import (
     EVENT_TYPE_INCOMING_CALL,
     EVENT_TYPE_MISSED_CALL,
     EVENT_TYPE_TERMINATED,
+    HISTORY_DEFAULT_RETENTION_DAYS,
+    OPT_HISTORY_RETENTION_DAYS,
     SIGNAL_CALL_RECEIVED,
     SUBTYPE_EXTERNAL_UNIT,
     UPDATE_INTERVAL,
@@ -242,6 +244,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             except (ApiError, AuthError) as err:
                 _LOGGER.warning("Failed to fetch events for home %s: %s", self.home_id, err)
                 events_history_data[self.home_id] = []
+
+            try:
+                await self._backfill_history(events_history_data[self.home_id], modules_data)
+            except Exception:
+                # History is a convenience; never let it fail the poll.
+                _LOGGER.exception("Failed to backfill call history from polled events")
 
             final_data = {
                 "homes": homes_data,
@@ -744,6 +752,50 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if self.history is None or not event_id:
             return
         await self.history.async_close_call(event_id=event_id, event_type=event_type)
+
+    async def _backfill_history(self, events: list[dict[str, Any]], modules: dict[str, Any]) -> None:
+        """Record calls the WebSocket push never delivered (#99).
+
+        The history store is otherwise filled only by the ``incoming_call``
+        push, so a ring during a WebSocket outage shows up in the last-event
+        sensor (from polling) while the cameras keep serving the previous
+        call's image. Polled call events carry the same ``session_id`` the
+        push path keys records on, so calls that did arrive by push are
+        skipped rather than duplicated.
+        """
+        if self.history is None:
+            return
+        retention_days = self.entry.options.get(OPT_HISTORY_RETENTION_DAYS, HISTORY_DEFAULT_RETENTION_DAYS)
+        cutoff = datetime.now(UTC).timestamp() - float(retention_days) * 86400
+        for event in events:
+            module_id = event.get("module_id")
+            for sub in event.get("subevents") or []:
+                if sub.get("type") not in (EVENT_TYPE_ACCEPTED_CALL, EVENT_TYPE_MISSED_CALL):
+                    continue
+                session_id = sub.get("session_id")
+                timestamp = event.get("time") or sub.get("time")
+                if not session_id or not module_id or not timestamp or timestamp < cutoff:
+                    continue
+                if self.history.get_event(session_id) is not None:
+                    continue
+                await self.history.async_record_call(
+                    event_id=session_id,
+                    module_id=module_id,
+                    module_name=modules.get(module_id, {}).get("name", module_id),
+                    snapshot_url=(sub.get("snapshot") or {}).get("url"),
+                    vignette_url=(sub.get("vignette") or {}).get("url"),
+                    event_timestamp=int(timestamp),
+                )
+                await self.history.async_close_call(
+                    event_id=session_id,
+                    event_type=(
+                        EVENT_TYPE_ANSWERED_ELSEWHERE
+                        if sub["type"] == EVENT_TYPE_ACCEPTED_CALL
+                        else EVENT_TYPE_TERMINATED
+                    ),
+                    ended_at=int(sub.get("time") or timestamp),
+                )
+                _LOGGER.info("Backfilled call %s from polled events (push not received)", session_id)
 
     def _end_call_session(self, module_id: str, reason: str) -> None:
         """Close an active call session and cancel its watchdog."""

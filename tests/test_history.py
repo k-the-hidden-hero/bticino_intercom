@@ -427,3 +427,24 @@ async def test_list_modules_empty_store(
         await store.async_load()
 
     assert store.list_modules() == []
+
+
+async def test_record_call_keeps_events_newest_first_by_timestamp(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """An older call recorded later (backfilled from polling) must not become the latest."""
+    with patch.object(hass.config, "path", side_effect=lambda *parts: str(tmp_path.joinpath(*parts))):
+        store = EventHistoryStore(hass, "entry_order")
+        await store.async_load()
+        for eid, ts in [("pushed-new", 1700000300), ("backfilled-old", 1700000100), ("pushed-mid", 1700000200)]:
+            await store.async_record_call(
+                event_id=eid,
+                module_id="mod_a",
+                module_name=None,
+                snapshot_url=None,
+                vignette_url=None,
+                event_timestamp=ts,
+            )
+
+    assert [e["event_id"] for e in store.list_events()] == ["pushed-new", "pushed-mid", "backfilled-old"]
