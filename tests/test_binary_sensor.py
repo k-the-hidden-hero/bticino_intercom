@@ -141,3 +141,15 @@ async def test_binary_sensor_coordinator_update(
     state = hass.states.get(entity_id)
     # When reachable is False, entity becomes unavailable
     assert state.state == "unavailable"
+
+
+async def test_call_sensor_exposes_its_module_id(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """The card matches a doorbell to its unit's camera through module_id."""
+    module_ids = {
+        hass.states.get(entity_id).attributes.get("module_id")
+        for entity_id in hass.states.async_entity_ids(BINARY_SENSOR_DOMAIN)
+    }
+    assert EXT_UNIT_MODULE_ID in module_ids

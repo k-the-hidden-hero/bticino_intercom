@@ -149,6 +149,8 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
             self._attr_available = module_data.get("reachable", True)
 
         attrs: dict[str, Any] = {
+            # Lets a card match this doorbell to the unit's camera.
+            "module_id": self._module_id,
             "reachable": module_data.get("reachable"),
         }
 

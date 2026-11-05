@@ -383,6 +383,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         """Return True if the coordinator has data and bridge is known."""
         return self.coordinator.last_update_success and self.coordinator.main_device_id is not None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the module this camera dials, so a card can pair it with its doorbell."""
+        return {"module_id": self._module_id} if self._module_id else {}
+
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return the most recent snapshot for this module from local history."""
         from .history import EventHistoryStore
