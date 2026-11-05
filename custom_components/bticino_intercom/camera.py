@@ -368,7 +368,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         )
 
         if store is not None:
-            events = store.list_events(module_id=self._module_id, limit=1)
+            events = [e for e in store.list_events() if e.get("module_id") in self._poster_module_ids()][:1]
             if events:
                 event = events[0]
                 eid = event.get("event_id")
@@ -385,6 +385,25 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                         _LOGGER.debug("Failed to read poster from %s", path)
 
         return None
+
+    def _poster_module_ids(self) -> set[str]:
+        """Return the history module ids whose calls belong to this unit.
+
+        Calls announced by an RTC offer are recorded under the external unit's
+        id, but calls that only arrive as a status push are recorded under the
+        bridge MAC, the only id that push carries. Those belong to this unit
+        when it is the home's only external unit — the same rule
+        ``_resolve_calling_module`` applies to the push itself.
+        """
+        module_ids = {self._module_id}
+        external_units = [
+            module_id
+            for module_id, module_data in self.coordinator.data.get("modules", {}).items()
+            if get_module_subtype(module_data) == SUBTYPE_EXTERNAL_UNIT
+        ]
+        if external_units == [self._module_id] and self.coordinator.main_device_id:
+            module_ids.add(self.coordinator.main_device_id)
+        return module_ids
 
     # --- SDP manipulation methods ---
     #

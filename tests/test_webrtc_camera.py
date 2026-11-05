@@ -1,6 +1,6 @@
 """Tests for the BTicino WebRTC camera entity."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
 from homeassistant.components.camera import CameraEntityFeature
@@ -10,7 +10,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bticino_intercom.const import DOMAIN
 
-from .conftest import BRIDGE_MAC
+from .conftest import BRIDGE_MAC, EXTERNAL_UNIT_2_ID
 
 
 def _get_all_webrtc_cameras(hass, mock_setup_entry):
@@ -383,3 +383,56 @@ async def test_stale_session_kept_during_active_call(
     camera._cancel_answer_watchdog()
 
     signaling.send_terminate.assert_not_called()
+
+
+def _install_history(hass, entry, tmp_path, events: list[dict]) -> None:
+    """Install a fake history store whose snapshots contain their event id."""
+    for event in events:
+        (tmp_path / f"{event['event_id']}.jpg").write_bytes(event["event_id"].encode())
+    store = MagicMock()
+    store.list_events.side_effect = lambda *, limit=None, module_id=None: [
+        e for e in events if module_id is None or e["module_id"] == module_id
+    ][:limit]
+    store.resolve_image_path.side_effect = lambda eid, _kind: tmp_path / f"{eid}.jpg"
+    hass.data[DOMAIN][entry.entry_id]["history"] = store
+
+
+async def test_poster_uses_bridge_keyed_calls_for_the_only_external_unit(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+    tmp_path,
+) -> None:
+    """Status-push-only calls are recorded under the bridge MAC; a sole unit shows them."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator.data["modules"].pop(EXTERNAL_UNIT_2_ID)
+    _install_history(
+        hass,
+        mock_setup_entry,
+        tmp_path,
+        [
+            {"event_id": "status-only-new", "module_id": BRIDGE_MAC},
+            {"event_id": "rtc-old", "module_id": camera._module_id},
+        ],
+    )
+
+    assert await camera.async_camera_image() == b"status-only-new"
+
+
+async def test_poster_ignores_bridge_keyed_calls_with_several_external_units(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+    tmp_path,
+) -> None:
+    """With several units a bridge-keyed call can't be attributed, so it isn't shown."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    _install_history(
+        hass,
+        mock_setup_entry,
+        tmp_path,
+        [
+            {"event_id": "status-only-new", "module_id": BRIDGE_MAC},
+            {"event_id": "rtc-old", "module_id": camera._module_id},
+        ],
+    )
+
+    assert await camera.async_camera_image() == b"rtc-old"
