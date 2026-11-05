@@ -33,7 +33,7 @@ from homeassistant.helpers.storage import Store
 from pybticino import AsyncAccount, AuthHandler, SignalingClient, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
-from .auth import async_clear_tokens, async_with_auth_retry
+from .auth import async_with_auth_retry
 from .const import (
     DOMAIN,
     PLATFORMS,
@@ -144,7 +144,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Validate credentials by attempting to get a token
         # With restored tokens this will use refresh instead of full auth
         await async_with_auth_retry(hass, entry, auth_handler, auth_handler.get_access_token)
-    except ApiError as err:
+    except (ApiError, AuthError) as err:
         _LOGGER.error("Client error during authentication: %s", err)
         raise ConfigEntryNotReady from err
 
@@ -339,10 +339,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Important: Re-raise CancelledError so the outer try block doesn't treat it as an unexpected error
                     raise
                 except ConfigEntryAuthFailed:
-                    entry.async_start_reauth(hass)
-                    return
-                except AuthError:
-                    await async_clear_tokens(hass, entry)
                     entry.async_start_reauth(hass)
                     return
                 except (

@@ -128,7 +128,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return await async_with_auth_retry(
                 self.hass, self.entry, self.account.auth_handler, self._async_update_data_once
             )
-        except ApiError as err:
+        except (ApiError, AuthError) as err:
             raise UpdateFailed(f"Authentication service unavailable: {err}") from err
 
     async def _async_update_data_once(self) -> dict[str, Any]:
@@ -283,7 +283,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             # "Unexpected error" with a full traceback.
             raise
         except AuthError:
-            # The outer recovery wrapper clears tokens and requests HA reauth.
+            # The outer wrapper distinguishes credential rejection from outages.
             raise
         except (ApiError, TimeoutError, OSError, ConnectionError) as err:
             if isinstance(err, ApiError) and is_invalid_token_error(err):

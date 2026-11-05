@@ -177,6 +177,7 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
             if not errors:
+                await async_clear_tokens(self.hass, self._reauth_entry)
                 self.hass.config_entries.async_update_entry(
                     self._reauth_entry,
                     data={
@@ -184,7 +185,6 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
                 )
-                await async_clear_tokens(self.hass, self._reauth_entry)
                 await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
                 return self.async_abort(reason="reauth_successful")
 
