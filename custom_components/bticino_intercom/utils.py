@@ -22,6 +22,14 @@ _MODULE_TYPE_TO_SUBTYPE = {
     "BNEU": SUBTYPE_EXTERNAL_UNIT,
     "BNDL": SUBTYPE_DOORLOCK,
     "BNSL": SUBTYPE_STAIRCASE_LIGHT,
+    "BNVL": SUBTYPE_STAIRCASE_LIGHT,
+}
+
+# Variant subtypes that name a module the integration already supports under
+# another subtype. The Classe 300X 344742 reports its staircase light as a BNVL
+# module with this variant instead of BNSL's bnsl_staircase_light (#103).
+_SUBTYPE_ALIASES = {
+    "bnvl_video_doorentry_light": SUBTYPE_STAIRCASE_LIGHT,
 }
 
 
@@ -31,7 +39,7 @@ def get_module_subtype(module_data: Mapping[str, Any]) -> str | None:
     if isinstance(variant, str):
         _, separator, subtype = variant.partition(":")
         if separator and subtype:
-            return subtype
+            return _SUBTYPE_ALIASES.get(subtype, subtype)
 
     module_type = module_data.get("type")
     return _MODULE_TYPE_TO_SUBTYPE.get(module_type) if isinstance(module_type, str) else None
