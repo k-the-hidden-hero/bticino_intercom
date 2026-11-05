@@ -49,10 +49,10 @@
       }
     },
     "abort": {
-        "cannot_connect": "Failed to connect, please try again later."
+      "cannot_connect": "Failed to connect, please try again later."
     },
     "error": {
-        "cannot_connect": "Failed to connect, please try again later."
+      "cannot_connect": "Failed to connect, please try again later."
     }
   },
   "entity": {
@@ -61,17 +61,27 @@
         "name": "External Door"
       },
       "internal_door": {
-         "name": "Internal Door"
+        "name": "Internal Door"
       }
     },
-     "binary_sensor": {
-       "call": {
-         "name": "Call"
-       }
-     },
+    "binary_sensor": {
+      "call": {
+        "name": "Call"
+      }
+    },
     "sensor": {
       "last_event": {
         "name": "Last Event"
+      }
+    },
+    "select": {
+      "do_not_disturb": {
+        "name": "Do not disturb",
+        "state": {
+          "ringtone_on": "Ringtone on",
+          "temporarily_muted": "Temporarily muted",
+          "always_muted": "Always muted"
+        }
       }
     }
   }

@@ -38,10 +38,10 @@
       }
     },
     "abort": {
-        "cannot_connect": "Impossibile connettersi, riprova più tardi."
+      "cannot_connect": "Impossibile connettersi, riprova più tardi."
     },
     "error": {
-        "cannot_connect": "Impossibile connettersi, riprova più tardi."
+      "cannot_connect": "Impossibile connettersi, riprova più tardi."
     }
   },
   "entity": {
@@ -50,13 +50,23 @@
         "name": "Porta Esterna"
       },
       "internal_door": {
-         "name": "Porta Interna"
+        "name": "Porta Interna"
       }
     },
-     "binary_sensor": {
-       "call": {
-         "name": "Chiamata"
-       }
-     }
+    "binary_sensor": {
+      "call": {
+        "name": "Chiamata"
+      }
+    },
+    "select": {
+      "do_not_disturb": {
+        "name": "Non disturbare",
+        "state": {
+          "ringtone_on": "Suoneria attiva",
+          "temporarily_muted": "Silenzioso temporaneo",
+          "always_muted": "Sempre silenzioso"
+        }
+      }
+    }
   }
 }

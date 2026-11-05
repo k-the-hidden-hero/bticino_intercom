@@ -13,7 +13,14 @@ PLATFORMS: list[Platform] = [
     Platform.EVENT,
     Platform.SWITCH,
     Platform.NUMBER,
+    Platform.SELECT,
 ]
+
+# BNC3 do-not-disturb (#71): the temporary mute lasts this many minutes unless
+# the duration number entity says otherwise. Durations live in the entry's
+# hass.data under this key, shared by the number and the select.
+DND_DURATION_STORE = "dnd_duration_minutes"
+DEFAULT_DND_DURATION_MINUTES = 60
 
 
 # Default values

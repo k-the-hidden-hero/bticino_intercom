@@ -370,7 +370,8 @@ async def _setup_integration(
     mock_signaling_client: AsyncMock,
 ) -> MockConfigEntry:
     """Shared helper to set up the integration with mocked pybticino."""
-    config_entry.add_to_hass(hass)
+    if hass.config_entries.async_get_entry(config_entry.entry_id) is None:
+        config_entry.add_to_hass(hass)
 
     with (
         patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
