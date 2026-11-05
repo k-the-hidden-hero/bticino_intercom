@@ -815,6 +815,87 @@ class TestRtcTerminateDedup:
         assert mock_refresh.call_count == 1
 
 
+class TestStatusPushDedup:
+    """Regression tests for #106: Netatmo delivers one copy of every push per
+    registration on the account (#56), so a single ring can arrive as dozens of
+    identical ``incoming_call`` pushes. Each copy used to fire its own ``ring``
+    event (one notification per copy) and its own API refresh (429)."""
+
+    @pytest.fixture(autouse=True)
+    def _single_external_unit(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """With one unit a status push is attributed to it, as on #106's C100X."""
+        del coordinator.data["modules"][EXTERNAL_UNIT_2_ID]
+
+    async def test_duplicate_incoming_calls_fire_one_ring(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """Copies of the same incoming_call push announce the ring once."""
+        events = async_capture_events(hass, "bticino_intercom_call")
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()) as mock_refresh:
+            for _ in range(6):
+                await coordinator._handle_websocket_message(ws_incoming_call)
+        await hass.async_block_till_done()
+
+        assert len([e for e in events if e.data.get("type") == "ring"]) == 1
+        assert mock_refresh.call_count == 1
+
+    async def test_duplicate_missed_calls_are_processed_once(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_missed_call: dict,
+    ) -> None:
+        """The same holds for the pushes that end a call."""
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()) as mock_refresh:
+            for _ in range(6):
+                await coordinator._handle_websocket_message(ws_missed_call)
+
+        assert mock_refresh.call_count == 1
+
+    async def test_a_new_call_is_not_taken_for_a_duplicate(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """Dedup is per call: a second ring with its own session still fires."""
+        second_call = {
+            **ws_incoming_call,
+            "extra_params": {**ws_incoming_call["extra_params"], "session_id": "another-session"},
+        }
+        events = async_capture_events(hass, "bticino_intercom_call")
+        with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+            await coordinator._handle_websocket_message(ws_incoming_call)
+            await coordinator._handle_websocket_message(second_call)
+        await hass.async_block_till_done()
+
+        assert len([e for e in events if e.data.get("type") == "ring"]) == 2
+
+    async def test_a_burst_of_pushes_polls_the_api_once(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """Distinct pushes in a burst share HA's refresh debounce.
+
+        Applying the push with ``async_set_updated_data`` cancelled the
+        debouncer, so every push started its own immediate refresh.
+        """
+        update = AsyncMock(return_value=coordinator.data)
+        with patch.object(coordinator, "_async_update_data", new=update):
+            for n in range(5):
+                push = {
+                    **ws_incoming_call,
+                    "extra_params": {**ws_incoming_call["extra_params"], "session_id": f"burst-{n}"},
+                }
+                await coordinator._handle_websocket_message(push)
+            coordinator._debounced_refresh.async_cancel()
+
+        assert update.await_count == 1
+
+
 # =============================================================================
 # Transient error tracking (consecutive API failures)
 # =============================================================================

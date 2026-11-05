@@ -36,6 +36,7 @@ from .const import (
     HISTORY_DEFAULT_RETENTION_DAYS,
     OPT_HISTORY_RETENTION_DAYS,
     SIGNAL_CALL_RECEIVED,
+    STATUS_PUSH_DEDUP_WINDOW,
     SUBTYPE_EXTERNAL_UNIT,
     UPDATE_INTERVAL,
 )
@@ -95,6 +96,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         # broadcasts to every device registered for push notifications.
         # See issue #56.
         self._closed_sessions: dict[str, datetime] = {}
+        # Status pushes already processed, "<event_type>:<session_id>" → when.
+        # The same broadcast delivers each status push once per registration
+        # on the account, dozens of copies in #106.
+        self._seen_status_pushes: dict[str, datetime] = {}
         # Current active call for WebRTC signaling (offer/answer SDP exchange)
         self._active_call: dict[str, Any] | None = None
         # Populated by __init__.py after entry setup.
@@ -597,6 +602,14 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         event_type: str,
     ) -> bool:
         """Process a status event (incoming_call, missed_call, accepted_call)."""
+        if self._is_duplicate_status_push(event_type, extra_params):
+            _LOGGER.debug(
+                "Ignoring duplicate %s push for session %s",
+                event_type,
+                extra_params.get("session_id"),
+            )
+            return False
+
         device_id = extra_params.get("device_id")
         device_name = self.data.get("modules", {}).get(device_id, {}).get("name", device_id)
 
@@ -821,6 +834,24 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._closed_sessions = {sid: ts for sid, ts in self._closed_sessions.items() if ts > cutoff}
         self._closed_sessions[session_id] = now
 
+    def _is_duplicate_status_push(self, event_type: str, extra_params: dict[str, Any]) -> bool:
+        """Return True if this status push was already processed, else record it.
+
+        A push without a session or subevent id cannot be matched and is never
+        treated as a duplicate.
+        """
+        push_id = extra_params.get("session_id") or extra_params.get("subevent_id")
+        if not push_id:
+            return False
+        key = f"{event_type}:{push_id}"
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=STATUS_PUSH_DEDUP_WINDOW)
+        self._seen_status_pushes = {k: ts for k, ts in self._seen_status_pushes.items() if ts > cutoff}
+        if key in self._seen_status_pushes:
+            return True
+        self._seen_status_pushes[key] = now
+        return False
+
     def _is_session_recently_closed(self, session_id: str) -> bool:
         """Return True if this session_id was closed within the dedup window."""
         if not session_id:
@@ -887,9 +918,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         # Removed the logic that fetches events again on PUSH_TYPE_WEBSOCKET_CONNECTION
 
         if data_updated:
-            # Notify listeners immediately with the data updated by the event
+            # Notify listeners immediately with the data updated by the event.
+            # Not async_set_updated_data: it cancels the refresh debouncer, so
+            # the request below would poll the API once per push (#106).
             _LOGGER.debug("WebSocket message processed, notifying listeners immediately.")
-            self.async_set_updated_data(self.data)
+            self.async_update_listeners()
 
             # Also request a full refresh to ensure full consistency later
             _LOGGER.debug("Requesting coordinator refresh after WebSocket update.")
