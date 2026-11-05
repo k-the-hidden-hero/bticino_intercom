@@ -48,6 +48,9 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 | **Sensor — Last Call Timestamp** | Timestamp sensor for the most recent completed call. |
 | **Sensor — Bridge Diagnostics** | Uptime, WiFi strength, WebSocket status, local IP, last seen, last config update. |
 | **Light** | Staircase lights (BNSL modules). On/off control. |
+| **Select — Do Not Disturb** | Classe 300X (BNC3) only. Ringtone mode, as in the Home + Security app: ringtone on, temporarily muted, always muted. |
+| **Number — Do Not Disturb Duration** | Classe 300X (BNC3) only. How many minutes "temporarily muted" lasts (default 60). |
+| **Switch / Number — Professional Studio** | Classe 300X (BNC3) only, when Professional Studio is configured on the device. |
 
 ### Real-time events
 

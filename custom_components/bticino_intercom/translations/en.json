@@ -70,6 +70,16 @@
       "last_event": {
         "name": "Last Event"
       }
+    },
+    "select": {
+      "do_not_disturb": {
+        "name": "Do not disturb",
+        "state": {
+          "ringtone_on": "Ringtone on",
+          "temporarily_muted": "Temporarily muted",
+          "always_muted": "Always muted"
+        }
+      }
     }
   }
 }

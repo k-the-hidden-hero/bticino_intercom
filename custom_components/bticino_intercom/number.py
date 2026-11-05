@@ -13,14 +13,14 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN
+from .const import DEFAULT_DND_DURATION_MINUTES, DND_DURATION_STORE, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PROFESSIONAL_STUDIO_DURATION_MINUTES = 60
-MIN_PROFESSIONAL_STUDIO_DURATION_MINUTES = 1
-MAX_PROFESSIONAL_STUDIO_DURATION_MINUTES = 1440
-STEP_PROFESSIONAL_STUDIO_DURATION_MINUTES = 1
+MIN_DURATION_MINUTES = 1
+MAX_DURATION_MINUTES = 1440
+STEP_DURATION_MINUTES = 1
 
 
 async def async_setup_entry(
@@ -37,6 +37,7 @@ async def async_setup_entry(
         "professional_studio_duration_minutes",
         {},
     )
+    dnd_duration_minutes = data.setdefault(DND_DURATION_STORE, {})
 
     entities: list[NumberEntity] = []
 
@@ -44,6 +45,20 @@ async def async_setup_entry(
         for module in home.modules:
             if module.type != "BNC3":
                 continue
+
+            # How long the select's "temporarily muted" lasts (#71).
+            entities.append(
+                BticinoDurationNumber(
+                    coordinator=coordinator,
+                    home_id=home.id,
+                    module_id=module.id,
+                    module_type=module.type,
+                    label=f"{module.name} Do Not Disturb Duration",
+                    unique_suffix="dnd_duration",
+                    duration_store=dnd_duration_minutes,
+                    default_minutes=DEFAULT_DND_DURATION_MINUTES,
+                )
+            )
 
             professional_studio = await coordinator.account.async_get_professional_studio_config(
                 home_id=home.id,
@@ -59,27 +74,29 @@ async def async_setup_entry(
                 )
 
                 entities.append(
-                    BticinoProfessionalStudioDurationNumber(
+                    BticinoDurationNumber(
                         coordinator=coordinator,
                         home_id=home.id,
                         module_id=module.id,
                         module_type=module.type,
-                        module_name=module.name,
+                        label=f"{module.name} Professional Studio Duration",
+                        unique_suffix="professional_studio_duration",
                         duration_store=professional_studio_duration_minutes,
+                        default_minutes=DEFAULT_PROFESSIONAL_STUDIO_DURATION_MINUTES,
                     )
                 )
 
     async_add_entities(entities)
 
 
-class BticinoProfessionalStudioDurationNumber(NumberEntity, RestoreEntity):
-    """Number entity for professional studio duration."""
+class BticinoDurationNumber(NumberEntity, RestoreEntity):
+    """Duration in minutes of a BNC3 timed mode (Professional Studio, temporary mute)."""
 
     _attr_icon = "mdi:timer-outline"
     _attr_mode = NumberMode.BOX
-    _attr_native_min_value = MIN_PROFESSIONAL_STUDIO_DURATION_MINUTES
-    _attr_native_max_value = MAX_PROFESSIONAL_STUDIO_DURATION_MINUTES
-    _attr_native_step = STEP_PROFESSIONAL_STUDIO_DURATION_MINUTES
+    _attr_native_min_value = MIN_DURATION_MINUTES
+    _attr_native_max_value = MAX_DURATION_MINUTES
+    _attr_native_step = STEP_DURATION_MINUTES
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_should_poll = False
 
@@ -89,8 +106,10 @@ class BticinoProfessionalStudioDurationNumber(NumberEntity, RestoreEntity):
         home_id: str,
         module_id: str,
         module_type: str,
-        module_name: str,
+        label: str,
+        unique_suffix: str,
         duration_store: dict[str, int],
+        default_minutes: int,
     ) -> None:
         """Initialize the number entity."""
 
@@ -102,14 +121,12 @@ class BticinoProfessionalStudioDurationNumber(NumberEntity, RestoreEntity):
         self.module_type = module_type
         self.duration_store = duration_store
         self.duration_key = f"{home_id}_{module_id}"
+        self._default_minutes = default_minutes
 
-        self._attr_name = f"{module_name} Professional Studio Duration"
-        self._attr_unique_id = f"{home_id}_{module_id}_professional_studio_duration"
+        self._attr_name = label
+        self._attr_unique_id = f"{home_id}_{module_id}_{unique_suffix}"
 
-        self._attr_native_value = self.duration_store.get(
-            self.duration_key,
-            DEFAULT_PROFESSIONAL_STUDIO_DURATION_MINUTES,
-        )
+        self._attr_native_value = self.duration_store.get(self.duration_key, default_minutes)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -131,27 +148,19 @@ class BticinoProfessionalStudioDurationNumber(NumberEntity, RestoreEntity):
         restored_state = await self.async_get_last_state()
 
         if restored_state is None:
-            self._set_duration_value(
-                self.duration_store.get(
-                    self.duration_key,
-                    DEFAULT_PROFESSIONAL_STUDIO_DURATION_MINUTES,
-                )
-            )
+            self._set_duration_value(self.duration_store.get(self.duration_key, self._default_minutes))
             return
 
         try:
             restored_value = int(float(restored_state.state))
         except (TypeError, ValueError):
-            _LOGGER.warning(
-                "Could not restore BTicino professional studio duration from %s",
-                restored_state.state,
-            )
-            restored_value = DEFAULT_PROFESSIONAL_STUDIO_DURATION_MINUTES
+            _LOGGER.warning("Could not restore %s from %s", self.entity_id, restored_state.state)
+            restored_value = self._default_minutes
 
         self._set_duration_value(restored_value)
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set professional studio duration."""
+        """Set the duration."""
 
         self._set_duration_value(value)
         self.async_write_ha_state()
@@ -162,12 +171,9 @@ class BticinoProfessionalStudioDurationNumber(NumberEntity, RestoreEntity):
         try:
             duration = int(value)
         except (TypeError, ValueError):
-            duration = DEFAULT_PROFESSIONAL_STUDIO_DURATION_MINUTES
+            duration = self._default_minutes
 
-        duration = max(
-            MIN_PROFESSIONAL_STUDIO_DURATION_MINUTES,
-            min(MAX_PROFESSIONAL_STUDIO_DURATION_MINUTES, duration),
-        )
+        duration = max(MIN_DURATION_MINUTES, min(MAX_DURATION_MINUTES, duration))
 
         self.duration_store[self.duration_key] = duration
         self._attr_native_value = duration

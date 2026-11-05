@@ -10,6 +10,7 @@ pinning.
 from unittest.mock import AsyncMock
 
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
+from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -27,6 +28,7 @@ async def test_no_switch_or_number_without_a_bnc3(
 
     assert SWITCH_DOMAIN not in domains
     assert NUMBER_DOMAIN not in domains
+    assert SELECT_DOMAIN not in domains
 
 
 async def test_getconfigs_is_not_called_without_a_bnc3(
@@ -55,3 +57,4 @@ async def test_eos_home_gets_neither_platform(
 
     assert SWITCH_DOMAIN not in domains
     assert NUMBER_DOMAIN not in domains
+    assert SELECT_DOMAIN not in domains
