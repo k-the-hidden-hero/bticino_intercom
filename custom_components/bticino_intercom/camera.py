@@ -379,6 +379,16 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         )
 
     @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the module this camera belongs to.
+
+        Every entity of the home shares the bridge device, so a frontend has
+        no other way to tell which external unit a camera, a doorbell sensor
+        or a lock belong to.
+        """
+        return {"module_id": self._module_id}
+
+    @property
     def available(self) -> bool:
         """Return True if the coordinator has data and bridge is known."""
         return self.coordinator.last_update_success and self.coordinator.main_device_id is not None

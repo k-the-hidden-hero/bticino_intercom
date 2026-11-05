@@ -97,6 +97,7 @@ class BticinoLight(BticinoEntity, LightEntity):
             return None
 
         attrs = {
+            "module_id": self._module_id,
             "reachable": module_data.get("reachable"),
             "last_used": format_timestamp_iso(module_data.get("last_user_interaction")),
         }
