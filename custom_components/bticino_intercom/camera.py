@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import re
+from collections import deque
 from contextlib import suppress
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.camera.webrtc import (
@@ -23,6 +25,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utc_from_timestamp, utcnow
 from pybticino import AsyncAccount, SignalingClient
 from webrtc_models import RTCConfiguration, RTCIceCandidateInit, RTCIceServer
+
+try:  # Home Assistant 2026.11 and later
+    from homeassistant.components.camera import CameraEntityCapabilities
+except ImportError:  # older releases have no native two-way audio
+    CameraEntityCapabilities = None
 
 from .const import DOMAIN, IMAGE_CACHE_SECONDS, SUBTYPE_EXTERNAL_UNIT
 from .coordinator import BticinoIntercomCoordinator
@@ -43,6 +50,11 @@ ANSWER_TIMEOUT_SECONDS = 20
 # it needs far longer than a live-view offer. The device rings for ~30s (the
 # push events carry expiry=30); allow for that plus the pick-up.
 CALL_HOME_ANSWER_TIMEOUT_SECONDS = 60
+
+# Sessions this camera terminated, remembered so the device's own terminate for
+# one of them, arriving after the next offer went out, is not taken for the new
+# session's. A few are enough: they are only ever the last ones closed.
+ENDED_SESSIONS_REMEMBERED = 4
 
 
 async def async_setup_entry(
@@ -307,6 +319,10 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
     _attr_has_entity_name = True
     _attr_supported_features = CameraEntityFeature.STREAM
     _attr_entity_registry_enabled_default = True
+    if CameraEntityCapabilities is not None:
+        # The device plays the audio it receives, so the 2026.11 frontend can
+        # show its own talk button (Labs > Two-way audio, over HTTPS only).
+        _attr_camera_entity_capabilities = CameraEntityCapabilities(two_way_audio=True)
 
     # Seconds to wait for the device's answer; None means ANSWER_TIMEOUT_SECONDS.
     _answer_timeout: float | None = None
@@ -331,9 +347,17 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         # Buffer for ICE candidates that arrive before session is ready
         self._pending_candidates: list[RTCIceCandidateInit] = []
         self._session_ready = False
-        # Per-camera signaling session ID (the shared SignalingClient tracks
-        # only the LAST session across all cameras)
+        # The browser stream this camera currently serves, and the signaling
+        # session the device opened for it. One camera serves one stream: a
+        # new offer releases the previous session (_release_stale_session).
+        self._ha_session_id: str | None = None
         self._signaling_session_id: str | None = None
+        self._ended_sessions: deque[str] = deque(maxlen=ENDED_SESSIONS_REMEMBERED)
+        # Terminate started by close_webrtc_session; the next offer waits for
+        # it, so the device has its peer slot back before being asked again.
+        self._pending_terminate: asyncio.Task | None = None
+        # Incoming call already answered: the device's offer cannot be reused.
+        self._answered_call_session: str | None = None
         # Watchdog that frees the device peer slot when no answer ever arrives
         self._answer_watchdog: asyncio.Task | None = None
         self._poster_event_id: str | None = None
@@ -752,8 +776,41 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             await self._signaling.send_candidate(
                 candidate=candidate.candidate,
                 sdp_m_line_index=candidate.sdp_m_line_index or 0,
+                session_id=self._signaling_session_id,
             )
         self._pending_candidates.clear()
+
+    def _is_foreign_session(self, sig_session_id: str | None) -> bool:
+        """Return True if a signaling message belongs to another session.
+
+        The shared client delivers every session's messages to the callbacks of
+        the latest offer, so a late terminate for the session this camera just
+        closed would otherwise end the stream that replaced it.
+        """
+        if not sig_session_id:
+            return False
+        if sig_session_id in self._ended_sessions:
+            return True
+        return self._signaling_session_id is not None and sig_session_id != self._signaling_session_id
+
+    async def _terminate(self, sig_session_id: str) -> None:
+        """Terminate one of this camera's signaling sessions."""
+        self._ended_sessions.append(sig_session_id)
+        try:
+            await self._signaling.send_terminate(sig_session_id)
+        except Exception as err:
+            _LOGGER.debug("Terminate for session %s failed: %s", sig_session_id, err)
+
+    async def _await_pending_terminate(self) -> None:
+        """Wait for the terminate a previous close started, if it is still running.
+
+        Every offer that arrives meanwhile waits for it, and the wait is
+        shielded: an offer cancelled while waiting must not cancel the
+        terminate and leak the slot.
+        """
+        task = self._pending_terminate
+        if task is not None and not task.done():
+            await asyncio.shield(task)
 
     async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
         """Handle a sync WebRTC offer (used by go2rtc proxy).
@@ -772,7 +829,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 _LOGGER.warning("go2rtc sync offer error: %s", msg.message)
                 answer_event.set()
 
-        await self.async_handle_async_webrtc_offer(offer_sdp, "go2rtc", collect_message)
+        # A distinct id per offer, so a newer go2rtc offer supersedes this one.
+        await self.async_handle_async_webrtc_offer(offer_sdp, f"go2rtc-{uuid4().hex}", collect_message)
 
         try:
             await asyncio.wait_for(answer_event.wait(), timeout=30)
@@ -799,6 +857,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             send_message(WebRTCError(code="no_device", message="No bridge device found"))
             return
 
+        self._ha_session_id = session_id
         self._session_ready = False
         self._pending_candidates.clear()
         # Keep the browser's own offer: the answer we hand back has to line up
@@ -806,12 +865,24 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         browser_offer_sdp = offer_sdp
 
         try:
+            # The 2026.11 talk button closes the stream and re-offers at once;
+            # the closed session has to be gone before we ask for a new one.
+            await self._await_pending_terminate()
+
             # Ensure signaling is connected with a fresh token
             await self._signaling.ensure_connected()
             await self._signaling.resubscribe()
 
+            if self._ha_session_id != session_id:
+                # A newer offer (or a close) arrived while we were waiting; it
+                # owns the camera now, so this one must not touch the callbacks.
+                return
+
             # Set up callbacks for this session
             async def on_answer(sig_session_id: str, sdp: str) -> None:
+                if self._is_foreign_session(sig_session_id):
+                    _LOGGER.debug("Ignoring answer for another session %s", sig_session_id)
+                    return
                 _LOGGER.info("Received answer SDP for session %s", sig_session_id)
                 self._cancel_answer_watchdog()
                 self._signaling_session_id = sig_session_id
@@ -829,6 +900,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 await self._flush_pending_candidates()
 
             async def on_candidate(sig_session_id: str, ice: dict) -> None:
+                if self._is_foreign_session(sig_session_id):
+                    return
                 candidate_str = ice.get("candidate", "")
                 sdp_m_line_index = ice.get("sdp_m_line_index", ice.get("sdpMLineIndex", 0))
                 _LOGGER.debug("Received remote ICE candidate (m=%d)", sdp_m_line_index)
@@ -842,6 +915,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 )
 
             async def on_event(sig_session_id: str, event_type: str, data: dict) -> None:
+                if self._is_foreign_session(sig_session_id):
+                    _LOGGER.debug("Ignoring %s for another session %s", event_type, sig_session_id)
+                    return
                 error = data.get("data", {}).get("error", {})
                 error_msg = error.get("message", event_type) if error else event_type
                 _LOGGER.warning("Signaling event %s: %s", event_type, error_msg)
@@ -872,22 +948,34 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 )
 
             active_call = self.coordinator.active_call
-            if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
+            answer_call = (
+                active_call
+                if active_call
+                and active_call.get("sdp")
+                and active_call.get("module_id") == self._module_id
+                # Once answered, the device's offer is spent: a stream restarted
+                # by the talk button opens a live view instead.
+                and active_call.get("session_id") != self._answered_call_session
+                else None
+            )
+            if answer_call:
                 # --- Answer mode: respond to the device's incoming call ---
+                call_session = answer_call.get("session_id")
                 _LOGGER.info(
                     "Answering incoming call (session=%s, device=%s)",
-                    active_call.get("session_id"),
+                    call_session,
                     device_id,
                 )
                 answer_sdp = self.convert_offer_to_answer_sdp(offer_sdp)
-                await self._signaling.send_answer(answer_sdp)
+                await self._signaling.send_answer(answer_sdp, session_id=call_session)
+                self._answered_call_session = call_session
 
                 # Send the device's original offer to the browser as the "answer".
                 # The browser needs a remote SDP to complete the WebRTC handshake.
                 # The device's offer serves this role — it contains the device's
                 # media capabilities, ICE credentials, and DTLS fingerprint.
                 # Reorder m-lines to match the browser's offer (RFC 8829).
-                device_sdp = self._reorder_mlines(active_call["sdp"], offer_sdp)
+                device_sdp = self._reorder_mlines(answer_call["sdp"], offer_sdp)
                 send_message(WebRTCAnswer(answer=device_sdp))
             else:
                 # --- Offer mode: initiate on-demand call ---
@@ -908,14 +996,20 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                     sdp=offer_sdp,
                     module_id=self._module_id,
                 )
+                if self._ha_session_id != session_id:
+                    # The stream was closed or replaced while the offer awaited
+                    # its ack: nobody will use this session, give it back.
+                    if offer_session_id:
+                        await self._terminate(offer_session_id)
+                    return
                 if offer_session_id:
                     self._signaling_session_id = offer_session_id
                     self._arm_answer_watchdog(offer_session_id, send_message)
 
             # In answer mode, we're ready immediately (no on_answer callback expected).
             # In offer mode, on_answer handles this when the device responds.
-            if active_call and active_call.get("sdp") and active_call.get("module_id") == self._module_id:
-                self._signaling_session_id = self._signaling.session_id
+            if answer_call:
+                self._signaling_session_id = answer_call.get("session_id")
                 self._session_ready = True
                 await self._flush_pending_candidates()
 
@@ -943,10 +1037,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             return
 
         _LOGGER.debug("Releasing stale signaling session %s before new offer", stale_session)
-        self._signaling._session_id = stale_session
-        with suppress(Exception):
-            await self._signaling.send_terminate()
         self._signaling_session_id = None
+        await self._terminate(stale_session)
 
     @callback
     def _arm_answer_watchdog(self, session_id: str, send_message: WebRTCSendMessage) -> None:
@@ -1000,10 +1092,8 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                     message=f"Device did not answer within {timeout}s",
                 )
             )
-        self._signaling._session_id = session_id
-        with suppress(Exception):
-            await self._signaling.send_terminate()
         self._signaling_session_id = None
+        await self._terminate(session_id)
 
     async def async_on_webrtc_candidate(self, session_id: str, candidate: RTCIceCandidateInit) -> None:
         """Forward an ICE candidate from the HA frontend to the device.
@@ -1011,13 +1101,17 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         If the signaling session isn't ready yet, buffer the candidate
         and send it once the session is established.
         """
-        if not self._session_ready or not self._signaling.session_id:
+        if session_id != self._ha_session_id:
+            # A candidate of a stream this camera no longer serves.
+            return
+        if not self._session_ready or not self._signaling_session_id:
             self._pending_candidates.append(candidate)
             return
 
         await self._signaling.send_candidate(
             candidate=candidate.candidate,
             sdp_m_line_index=candidate.sdp_m_line_index or 0,
+            session_id=self._signaling_session_id,
         )
 
     @callback
@@ -1047,27 +1141,29 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
 
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
-        """Close the WebRTC session by sending terminate."""
-        # Prefer this camera's tracked session id, but fall back to the shared
-        # signaling client's current session id so we still terminate when the
-        # offer was acked but never answered (issue #58 / #60).
-        signaling_session_id = self._signaling_session_id or self._signaling.session_id
+        """Close the WebRTC session by sending terminate.
+
+        An offer still waiting for its ack has no session id yet; the offer
+        path terminates it as soon as the ack arrives (issue #58 / #60).
+        """
+        if session_id != self._ha_session_id:
+            # A stream this camera no longer serves: its session was already
+            # released when the newer one started.
+            _LOGGER.debug("Ignoring close of superseded WebRTC session %s", session_id)
+            return
+        signaling_session_id = self._signaling_session_id
         _LOGGER.info(
             "Closing WebRTC session for %s (signaling_session=%s)",
             self._module_id,
             signaling_session_id,
         )
+        self._ha_session_id = None
         self._cancel_answer_watchdog()
         self._session_ready = False
         self._pending_candidates.clear()
         self._signaling_session_id = None
         if signaling_session_id:
-            # Point the shared signaling client at this camera's session so
-            # send_terminate uses the correct session_id.  HA runs on a
-            # single-threaded event loop, so there is no race with other
-            # cameras between setting the id and awaiting send_terminate.
-            self._signaling._session_id = signaling_session_id
-            self.hass.async_create_task(self._signaling.send_terminate())
+            self._pending_terminate = self.hass.async_create_task(self._terminate(signaling_session_id))
 
 
 class BticinoCallHomeCamera(BticinoWebRTCCamera):
