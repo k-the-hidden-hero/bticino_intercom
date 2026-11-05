@@ -436,3 +436,13 @@ async def test_poster_ignores_bridge_keyed_calls_with_several_external_units(
     )
 
     assert await camera.async_camera_image() == b"rtc-old"
+
+
+async def test_external_unit_camera_exposes_its_module_id(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """Each external unit's camera carries the module_id its doorbell has."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    state = hass.states.get(camera.entity_id)
+    assert state.attributes.get("module_id") == camera._module_id

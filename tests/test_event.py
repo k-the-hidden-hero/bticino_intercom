@@ -67,3 +67,15 @@ async def test_event_has_doorbell_device_class(
     entity_id = states[0]
     state = hass.states.get(entity_id)
     assert state.attributes.get("device_class") == EventDeviceClass.DOORBELL
+
+
+async def test_doorbell_event_exposes_its_module_id_before_any_ring(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """module_id is there from the start, not only in the last event's data."""
+    module_ids = {
+        hass.states.get(entity_id).attributes.get("module_id")
+        for entity_id in hass.states.async_entity_ids(EVENT_DOMAIN)
+    }
+    assert EXTERNAL_UNIT_ID in module_ids
