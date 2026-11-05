@@ -34,7 +34,7 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 - **Multi-camera support** — One camera entity per external unit (BNEU module). Homes with multiple entrance cameras can view each independently.
 - **Call history** — Incoming call snapshots and vignettes are saved locally as soon as the doorbell rings. Images remain viewable indefinitely, even after the cloud URLs expire. Browsable from the HA Media Browser. Configurable retention (default: 30 days, 500 events).
 - **Per-module call tracking** — Call sessions tracked per module with retransmission deduplication, ensuring reliable event processing.
-- **Two-way audio** — Hear the visitor and talk back via WebRTC. Requires the [bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras) custom card (HA's built-in camera player mutes audio by design).
+- **Two-way audio** — Hear the visitor and talk back via WebRTC. On Home Assistant 2026.11 and later the camera's own view has a talk button (see [Native two-way audio](#native-two-way-audio-home-assistant-202611)); on older versions it needs the [bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras) custom card.
 
 ### Entities
 
@@ -82,7 +82,21 @@ For the full experience, check out [bticino_ha_extras](https://github.com/k-the-
 - Additional automation blueprints
 
 > [!NOTE]
-> Home Assistant's built-in camera player mutes WebRTC audio by design. The custom card from `bticino_ha_extras` is required to hear the visitor and talk back through the intercom.
+> Before Home Assistant 2026.11 the built-in camera player has no way to talk back, so the custom card from `bticino_ha_extras` is required to hear the visitor and talk back through the intercom. From 2026.11 the built-in player can do it too: see below.
+
+### Native two-way audio (Home Assistant 2026.11)
+
+Home Assistant 2026.11 added two-way audio to its own camera player, as a Labs preview. The external unit cameras and **Call Home** declare it, so no custom card is needed to talk back:
+
+1. Go to **Settings** → **System** → **Labs** and turn on **Two-way audio**.
+2. Open Home Assistant over **HTTPS** (Nabu Casa, or your own certificate). Browsers only give the microphone to secure pages.
+3. Open the camera (for example from its more-info dialog) and press the microphone button.
+
+Things to know:
+
+- Pressing the microphone restarts the stream: the player closes the running session and opens a new one that carries your voice. The video drops for a moment.
+- If the doorbell is ringing and the intercom sent its call video, the first stream answers that call. Pressing the microphone then ends that call and opens a live view of the same unit, with the microphone on.
+- The browser limits below still apply: the intercom only works with Chromium-based browsers.
 
 ### Light as Lock mode
 
