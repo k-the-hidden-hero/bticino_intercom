@@ -360,6 +360,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         extra_params = message.get("extra_params", {})
         push_type = message.get("push_type", "")
 
+        # The push WebSocket is per account: with several homes on it, every
+        # entry also receives the other homes' pushes (#95).
+        push_home_id = extra_params.get("home_id")
+        if push_home_id and push_home_id != self.home_id:
+            _LOGGER.debug("Ignoring push for another home %s (push_type=%s)", push_home_id, push_type)
+            return False
+
         # --- Format A: RTC events (BNC1-rtc) ---
         rtc_data = extra_params.get("data", {})
         rtc_action = rtc_data.get("type")  # "offer", "rescind", "terminate"

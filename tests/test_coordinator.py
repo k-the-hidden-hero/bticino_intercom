@@ -896,6 +896,64 @@ class TestStatusPushDedup:
         assert update.await_count == 1
 
 
+def _from_home(push: dict, home_id: str | None) -> dict:
+    """Return a copy of push addressed to home_id (or with no home_id at all)."""
+    extra = {k: v for k, v in push["extra_params"].items() if k != "home_id"}
+    if home_id is not None:
+        extra["home_id"] = home_id
+    return {**push, "extra_params": extra}
+
+
+class TestPushesFromAnotherHome:
+    """Regression tests for #95: the push WebSocket is per account, so with two
+    homes on one account each config entry also receives the other home's
+    pushes. They were processed as this home's own: the other intercom's
+    snapshot became this one's last picture, and its ring rang this unit."""
+
+    @pytest.fixture(autouse=True)
+    def _single_external_unit(self, coordinator: BticinoIntercomCoordinator) -> None:
+        """One unit, so a status push would otherwise be attributed to it."""
+        del coordinator.data["modules"][EXTERNAL_UNIT_2_ID]
+
+    async def test_status_push_for_another_home_is_ignored(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """Another home's ring updates nothing and fires nothing here."""
+        events = async_capture_events(hass, "bticino_intercom_call")
+
+        result = await coordinator._process_websocket_event(_from_home(ws_incoming_call, "other-home"))
+        await hass.async_block_till_done()
+
+        assert result is False
+        assert coordinator.data["last_event"] == {}
+        assert events == []
+
+    async def test_rtc_offer_for_another_home_is_ignored(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+    ) -> None:
+        """Another home's offer must not become this entry's active call."""
+        result = await coordinator._process_websocket_event(_from_home(ws_rtc_offer, "other-home"))
+
+        assert result is False
+        assert coordinator.active_call is None
+
+    async def test_push_without_home_id_is_still_processed(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_incoming_call: dict,
+    ) -> None:
+        """A push that does not say which home it is for is not dropped."""
+        result = await coordinator._process_websocket_event(_from_home(ws_incoming_call, None))
+
+        assert result is True
+        assert coordinator.data["last_event"]["snapshot_url"] == "https://example.com/snapshot.jpg"
+
+
 # =============================================================================
 # Transient error tracking (consecutive API failures)
 # =============================================================================
