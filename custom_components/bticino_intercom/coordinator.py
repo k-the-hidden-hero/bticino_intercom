@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from pybticino import AsyncAccount, SignalingClient, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError
 
+from .auth import async_with_auth_retry, is_invalid_token_error
 from .const import (
     CALL_RETRANSMIT_WINDOW,
     CALL_SESSION_MAX_DURATION,
@@ -69,6 +70,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=f"{DOMAIN} Coordinator - {entry.entry_id}",
             update_interval=timedelta(minutes=UPDATE_INTERVAL),
         )
@@ -128,6 +130,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         return self._active_call
 
     async def _async_update_data(self) -> dict[str, Any]:
+        """Recover API-rejected tokens once, preserving upstream polling behavior."""
+        try:
+            return await async_with_auth_retry(
+                self.hass, self.entry, self.account.auth_handler, self._async_update_data_once
+            )
+        except (ApiError, AuthError) as err:
+            raise UpdateFailed(f"Authentication service unavailable: {err}") from err
+
+    async def _async_update_data_once(self) -> dict[str, Any]:
         """Fetch data from the API, register devices, and return the combined data."""
         _LOGGER.debug("Coordinator: Starting data update")
         homes_data = {}
@@ -218,7 +229,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             try:
                 status_data = await self.account.async_get_home_status(self.home_id)
                 modules_status = status_data.get("body", {}).get("home", {}).get("modules", [])
-            except (ApiError, AuthError) as err:
+            except AuthError:
+                raise
+            except ApiError as err:
+                if is_invalid_token_error(err):
+                    raise
                 _LOGGER.warning("Failed to fetch status for home %s: %s", self.home_id, err)
                 modules_status = []
 
@@ -246,7 +261,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             try:
                 events_data = await self.account.async_get_events(self.home_id, size=20)
                 events_history_data[self.home_id] = events_data.get("body", {}).get("home", {}).get("events", [])
-            except (ApiError, AuthError) as err:
+            except AuthError:
+                raise
+            except ApiError as err:
+                if is_invalid_token_error(err):
+                    raise
                 _LOGGER.warning("Failed to fetch events for home %s: %s", self.home_id, err)
                 events_history_data[self.home_id] = []
 
@@ -276,10 +295,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             # bridge) — don't let the generic handler re-wrap it as
             # "Unexpected error" with a full traceback.
             raise
-        except AuthError as err:
-            # Auth errors are critical — must re-authenticate
-            raise UpdateFailed(f"Authentication error: {err}") from err
+        except AuthError:
+            # The outer wrapper distinguishes credential rejection from outages.
+            raise
         except (ApiError, TimeoutError, OSError, ConnectionError) as err:
+            if isinstance(err, ApiError) and is_invalid_token_error(err):
+                raise
             self._consecutive_transient_errors += 1
             # Transient errors: return last known data for the first few
             # failures to avoid flapping.  After MAX_CONSECUTIVE_TRANSIENT_ERRORS

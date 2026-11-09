@@ -33,9 +33,11 @@ from homeassistant.helpers.storage import Store
 from pybticino import AsyncAccount, AuthHandler, SignalingClient, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
+from .auth import async_with_auth_retry
 from .const import (
     DOMAIN,
     PLATFORMS,
+    TOKEN_STORAGE_VERSION,
 )
 from .coordinator import BticinoIntercomCoordinator
 from .history import EventHistoryStore, get_history_options
@@ -58,7 +60,6 @@ COORDINATOR_KEY = "coordinator"
 START_LISTENER_REMOVE_KEY = "start_listener_remove"
 HISTORY_KEY = "history"
 HISTORY_VIEW_FLAG = f"{DOMAIN}_history_view_registered"
-TOKEN_STORAGE_VERSION = 1
 
 
 def _next_websocket_retry(
@@ -143,11 +144,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         # Validate credentials by attempting to get a token
         # With restored tokens this will use refresh instead of full auth
-        await auth_handler.get_access_token()
-    except AuthError as err:
-        _LOGGER.error("Authentication failed: %s", err)
-        raise ConfigEntryAuthFailed from err
-    except ApiError as err:
+        await async_with_auth_retry(hass, entry, auth_handler, auth_handler.get_access_token)
+    except (ApiError, AuthError) as err:
         _LOGGER.error("Client error during authentication: %s", err)
         raise ConfigEntryNotReady from err
 
@@ -304,7 +302,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Attempt to connect (includes subscription and starting listener)
                     _LOGGER.info("Attempting WebSocket connect... (calling websocket_client.connect)")
                     message_time_at_connect = coordinator.last_ws_message_time
-                    await websocket_client.connect()
+                    await async_with_auth_retry(hass, entry, auth_handler, websocket_client.connect)
                     _LOGGER.info("WebSocket connect call completed without raising immediate exception.")
                     connection_started_at = asyncio.get_running_loop().time()
                     is_boot = False
@@ -326,9 +324,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             if elapsed >= TOKEN_RESUBSCRIBE_INTERVAL:
                                 try:
                                     _LOGGER.info("Re-subscribing with fresh token (%.0fs elapsed)...", elapsed)
-                                    await websocket_client.resubscribe()
+                                    await async_with_auth_retry(hass, entry, auth_handler, websocket_client.resubscribe)
                                     last_resubscribe = asyncio.get_running_loop().time()
                                     _LOGGER.info("Re-subscribe successful, connection kept alive.")
+                                except ConfigEntryAuthFailed:
+                                    raise
                                 except Exception:
                                     _LOGGER.warning("Re-subscribe failed, forcing reconnect.", exc_info=True)
                                     listener_task.cancel()
@@ -342,12 +342,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     _LOGGER.info("WebSocket connection manager task cancelled during connect/listen.")
                     # Important: Re-raise CancelledError so the outer try block doesn't treat it as an unexpected error
                     raise
-                except AuthError as err:
-                    _LOGGER.error(
-                        "WebSocket connection failed due to AuthError: %s. Will retry.",
-                        err,
-                    )
-                    # No need to raise ConfigEntryAuthFailed here, let it retry.
+                except ConfigEntryAuthFailed:
+                    entry.async_start_reauth(hass)
+                    return
                 except (
                     PyBticinoException,
                     websockets.exceptions.WebSocketException,

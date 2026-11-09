@@ -3,6 +3,7 @@
 from homeassistant.const import Platform
 
 DOMAIN = "bticino_intercom"
+TOKEN_STORAGE_VERSION = 1
 
 PLATFORMS: list[Platform] = [
     Platform.LOCK,

@@ -16,6 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pybticino import AsyncAccount, AuthHandler
 from pybticino.exceptions import ApiError, AuthError
 
+from .auth import async_clear_tokens
 from .const import (
     DOMAIN,
     HISTORY_DEFAULT_MAX_EVENTS,
@@ -176,6 +177,7 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
             if not errors:
+                await async_clear_tokens(self.hass, self._reauth_entry)
                 self.hass.config_entries.async_update_entry(
                     self._reauth_entry,
                     data={
