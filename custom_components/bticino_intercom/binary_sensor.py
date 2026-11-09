@@ -149,6 +149,9 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
             self._attr_available = module_data.get("reachable", True)
 
         attrs: dict[str, Any] = {
+            # the module lets a frontend pair this sensor with its camera:
+            # every entity of the home shares the bridge device
+            "module_id": self._module_id,
             "reachable": module_data.get("reachable"),
         }
 
