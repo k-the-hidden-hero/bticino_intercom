@@ -18,15 +18,15 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 >
 > If your device uses the old "BTicino Door Entry" app, it is not compatible. BTicino has announced migration to the Netatmo platform — check with BTicino support for your device's status.
 >
-> EasyKit WiFi kits (e.g. 310913, 360910) are supported as of v2.0.4. Live video on
-> EasyKit's `BDIY` bridge is not — that bridge does not send the SDP offer needed to
-> answer an incoming call (see [#72](https://github.com/k-the-hidden-hero/bticino_intercom/issues/72)).
+> EasyKit WiFi kits (e.g. 310913, 360910) are supported since v2.0.4. On EasyKit's `BDIY`
+> bridge an incoming call's offer arrives only over FCM, so answering a ring from Home
+> Assistant is not supported yet. The work is under way in [#72](https://github.com/k-the-hidden-hero/bticino_intercom/issues/72).
 
 ---
 
 ## Features
 
-### v2.0 Highlights
+### Highlights
 
 - **WebRTC live video streaming** — On-demand live view from your intercom cameras, directly in the Home Assistant dashboard. Uses native WebRTC via the Netatmo cloud (no go2rtc or RTSP needed).
 - **Doorbell event entity** — Modern `EventDeviceClass.DOORBELL` entity for doorbell ring detection, alongside the existing binary sensor for backwards compatibility.
@@ -47,18 +47,24 @@ Communicates with the BTicino/Netatmo cloud API via the [pybticino](https://gith
 | **Sensor — Last Event** | Shows the last call event type (incoming, answered elsewhere, terminated) with timestamp and snapshot URLs. |
 | **Sensor — Last Call Timestamp** | Timestamp sensor for the most recent completed call. |
 | **Sensor — Bridge Diagnostics** | Uptime, WiFi strength, WebSocket status, local IP, last seen, last config update. |
-| **Light** | Staircase lights (BNSL modules). On/off control. |
+| **Light** | Staircase lights (BNSL modules, or BNVL on the 344742). On/off control. |
 | **Select — Do Not Disturb** | Classe 300X (BNC3) only. Ringtone mode, as in the Home + Security app: ringtone on, temporarily muted, always muted. |
 | **Number — Do Not Disturb Duration** | Classe 300X (BNC3) only. How many minutes "temporarily muted" lasts (default 60). |
 | **Switch / Number — Professional Studio** | Classe 300X (BNC3) only, when Professional Studio is configured on the device. |
 
+Entities also carry a `module_id` attribute. The camera and the doorbell of the same external unit share it, so a card can tell which camera belongs to which doorbell when there are several entrances.
+
 ### Real-time events
 
-The integration fires logbook events for automations:
+The integration fires these events on the Home Assistant bus, for automations and the logbook:
 
-- `bticino_intercom_incoming_call` — someone rang the doorbell
-- `bticino_intercom_answered_elsewhere` — call answered on another device
-- `bticino_intercom_terminated` — call ended
+- `bticino_intercom_incoming_call`: someone rang the doorbell
+- `bticino_intercom_answered_elsewhere`: the call was answered on another device
+- `bticino_intercom_missed_call`: nobody answered
+- `bticino_intercom_terminated`: the call ended
+- `bticino_intercom_call`: one event when a call rings (`type: ring`, with the snapshot and the camera entity) and one when it ends (`type: end`, with a `reason`)
+
+The `bticino_intercom.reject_call` action ends the ringing call on every device.
 
 ### Automation Blueprints
 
@@ -258,50 +264,27 @@ data:
 | Problem | Cause | Solution |
 |---|---|---|
 | WebSocket errors at startup | Normal during first connection attempts | Wait 1-2 minutes, the integration retries automatically |
-| "Something is blocking startup" | Other integrations (not this one since v1.8.1) | Unrelated to bticino_intercom |
 | Delayed call notifications | WebSocket was disconnected | Check debug logs; the watchdog should reconnect within 10 minutes |
 | Authentication failed | Wrong credentials or expired token | Re-enter credentials in the integration settings |
 | No entities created | Modules not found in topology | Check that your intercom appears in the Home + Security app |
 
 ---
 
-## v2.0 (Stable) — WebRTC live video & two-way audio
-
-v2.0 is the recommended version for HA ≥ 2026.5. For older HA, stay on the v1.9.x stable line.
-
-### What to install
-
-You need **two** custom components for the full v2.0 experience:
+## Live video and the companion card
 
 | Component | What it does | Install |
 |---|---|---|
 | **[bticino_intercom](https://github.com/k-the-hidden-hero/bticino_intercom)** | The integration (camera, sensors, locks, events, call history) | HACS or manual |
-| **[bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras)** | Custom Lovelace card with live video, two-way audio, call history UI | Manual (copy JS to `www/`) |
+| **[bticino_ha_extras](https://github.com/k-the-hidden-hero/bticino_ha_extras)** | Custom Lovelace card with live video, two-way audio and the call history | HACS (Frontend) or manual |
+
+On Home Assistant 2026.11 and later the built-in camera player can talk back too (see [Native two-way audio](#native-two-way-audio-home-assistant-202611)). The card is still the way to get the call history and the door buttons in one place.
 
 > [!IMPORTANT]
 > **Do NOT use AlexxIT's WebRTC integration** (`custom_components/webrtc`) or other third-party WebRTC players to display the BTicino camera. They are not compatible with the BTicino signaling protocol and will cause crashes, especially on iOS/Safari (WebKit). Use the dedicated card from `bticino_ha_extras`.
 
-### Installing v2.0
+### Installing the card
 
-**Integration (HACS):**
-1. In HACS, go to **BTicino Intercom** > **Update** (HACS picks up v2.0 once it's released)
-2. Restart Home Assistant
-
-**Or downgrade to v1.9.x** if your HA is older than 2026.5.0.
-
-**Integration (manual):**
-1. Download the latest `v2.0.0` from [Releases](https://github.com/k-the-hidden-hero/bticino_intercom/releases)
-2. Replace `custom_components/bticino_intercom/` with the new version
-3. Clear `__pycache__` if using file sync: `find custom_components/bticino_intercom -name __pycache__ -exec rm -rf {} +`
-4. Restart Home Assistant
-
-**Custom card:**
-1. Download `bticino-intercom-card.js` from [bticino_ha_extras releases](https://github.com/k-the-hidden-hero/bticino_ha_extras/releases)
-2. Copy to `config/www/bticino-intercom-card.js`
-3. Add as a Dashboard resource: **Settings > Dashboards > Resources > Add Resource**
-   - URL: `/local/bticino-intercom-card.js`
-   - Type: **JavaScript Module**
-4. Hard-refresh the browser (`Ctrl+Shift+R`) to clear cache
+Add `https://github.com/k-the-hidden-hero/bticino_ha_extras` to HACS as a custom repository of type **Dashboard** (Frontend), download **BTicino Intercom Card**, and hard-refresh the browser. HACS registers the card resource by itself. The [bticino_ha_extras README](https://github.com/k-the-hidden-hero/bticino_ha_extras#readme) has the manual install and every option.
 
 ### Dashboard card example
 
@@ -351,7 +334,7 @@ intercoms:
 
 ### Reporting issues
 
-When reporting a v2.0 bug:
+When reporting a bug:
 1. Enable debug logging (see [Troubleshooting](#troubleshooting))
 2. Reproduce the issue
 3. Download the full log from **Settings > System > Logs > Download full log**
@@ -364,9 +347,9 @@ When reporting a v2.0 bug:
 
 ## Requirements
 
-- Home Assistant 2026.5.0 or later
+- Home Assistant 2026.5.0 or later (on older versions, use the v1.9.x releases)
 - A BTicino Classe 100X, 300X or 300 EOS, or a BTicino/Legrand EasyKit, connected to the Netatmo cloud
-- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.9.0 (installed automatically)
+- [pybticino](https://github.com/k-the-hidden-hero/pybticino) >= 1.10.0 (installed automatically)
 
 ---
 
@@ -375,10 +358,12 @@ When reporting a v2.0 bug:
 Found a bug or want a feature? [Open an issue](https://github.com/k-the-hidden-hero/bticino_intercom/issues).
 
 Pull requests are welcome. The project uses:
-- **ruff** for linting and formatting
-- **pytest** with `pytest-homeassistant-custom-component` for testing (159 tests)
+- **ruff** for linting and formatting (the version CI pins)
+- **pytest** with `pytest-homeassistant-custom-component` for testing
 - **bandit** for security scanning
 - CI runs on every push and PR
+
+Code that speaks the Netatmo/BTicino protocol belongs in [pybticino](https://github.com/k-the-hidden-hero/pybticino) rather than here; see [pybticino#31](https://github.com/k-the-hidden-hero/pybticino/issues/31). [CLAUDE.md](CLAUDE.md) has the commands and the device quirks worth knowing before you start.
 
 ---
 
