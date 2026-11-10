@@ -19,7 +19,7 @@ jobs:
     name: Ruff lint & format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pinned on purpose: an unpinned ruff silently changes the formatting rules
       # under every open PR, turning main red for reasons no author can act on.
       # Bump this deliberately, with the reformat it implies in the same commit.
@@ -37,10 +37,10 @@ jobs:
     name: Security scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -59,10 +59,10 @@ jobs:
       matrix:
         python-version: ["3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -71,7 +71,8 @@ jobs:
           pip install --upgrade pip
           pip install pytest pytest-asyncio pytest-homeassistant-custom-component freezegun
           pip install websockets PyTurboJPEG
-          pip install pybticino>=1.5.0
+          # Same requirement as the integration, so CI tests what HA installs.
+          jq -r '.requirements[]' custom_components/bticino_intercom/manifest.json | xargs pip install
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
@@ -81,7 +82,7 @@ jobs:
     name: HA validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: home-assistant/actions/hassfest@master
         name: HassFest
       - name: HACS validation
