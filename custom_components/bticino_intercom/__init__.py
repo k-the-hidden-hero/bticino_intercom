@@ -261,11 +261,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         module_id = coord.active_call.get("module_id")
-        try:
-            await sig.send_terminate()
-        except Exception:
-            _LOGGER.exception("reject_call: failed to send terminate")
-            return
+        session_id = coord.active_call.get("session_id")
+        if session_id:
+            # Name the call's own session: without an id the signaling client
+            # falls back to its most recent one, which may be a live view.
+            try:
+                await sig.send_terminate(session_id=session_id)
+            except Exception:
+                _LOGGER.exception("reject_call: failed to send terminate")
+                return
+        else:
+            _LOGGER.debug("reject_call: the call has no signaling session, nothing to terminate")
         coord._fire_call_event("end", module_id, reason="rejected")
         coord._active_call = None
 
