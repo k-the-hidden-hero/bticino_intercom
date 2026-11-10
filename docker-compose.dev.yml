@@ -10,6 +10,6 @@ services:
       # Mount custom component (live reload on HA restart)
       - ./custom_components/bticino_intercom:/config/custom_components/bticino_intercom:ro
       # Mount pybticino source for development
-      - /home/koma/src/pybticino:/pybticino:ro
+      - ../pybticino:/pybticino:ro
     environment:
       - TZ=Europe/Rome

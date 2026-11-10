@@ -1,5 +1,8 @@
 # BTicino Intercom v2.0 — WebRTC Architecture & Reference Guide
 
+> [!NOTE]
+> Historical document: written in April 2026, while 2.0 was being developed, and not kept up to date since. The current protocol reference is in the pybticino docs ([signaling](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-signaling.md), [audio](https://github.com/k-the-hidden-hero/pybticino/blob/main/docs/webrtc-audio.md)).
+
 > **Purpose**: Comprehensive architectural reference for implementing WebRTC live video,
 > event entity migration, and two-way audio in the BTicino Intercom integration.
 > Written to be self-contained — a new session can pick this up without prior context.
