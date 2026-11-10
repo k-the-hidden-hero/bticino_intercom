@@ -48,6 +48,8 @@ class BticinoDoorbellEvent(BticinoEntity, EventEntity):
         self._attr_unique_id = f"{coordinator.entry.entry_id}_doorbell_event_{module_id}"
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
         self._attr_name = module_data.get("name") or "Doorbell"
+        # Lets a card match this doorbell to the unit's camera before any ring.
+        self._attr_extra_state_attributes = {"module_id": module_id}
 
     @callback
     def _handle_call_received(self, state: bool, module_id: str | None) -> None:
