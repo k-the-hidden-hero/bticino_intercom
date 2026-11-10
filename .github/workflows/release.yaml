@@ -42,7 +42,7 @@ jobs:
           zip -r ${{ github.workspace }}/bticino_intercom-${{ env.VERSION }}.zip . -x ".*" -x "__pycache__/*"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ env.VERSION }}
           generate_release_notes: true
