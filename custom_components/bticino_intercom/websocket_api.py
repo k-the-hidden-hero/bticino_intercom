@@ -1,4 +1,4 @@
-"""WebSocket API for the BTicino Intercom call history.
+"""WebSocket API for BTicino Intercom call history and pending calls.
 
 The Lovelace card needs the call log as data - who called, when, and whether
 the call was answered - which a Media Source listing cannot carry, so it is
@@ -13,8 +13,11 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
+from homeassistant.auth.permissions.const import POLICY_READ
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 from .history import IMAGE_KINDS, EventHistoryStore
@@ -33,11 +36,41 @@ WEBSOCKET_API_FLAG = f"{DOMAIN}_websocket_api_registered"
 
 @callback
 def async_register_websocket_api(hass: HomeAssistant) -> None:
-    """Register the history command, once per Home Assistant instance."""
+    """Register call-data commands once per Home Assistant instance."""
     if hass.data.get(WEBSOCKET_API_FLAG):
         return
     websocket_api.async_register_command(hass, ws_list_history)
+    websocket_api.async_register_command(hass, ws_get_active_calls)
     hass.data[WEBSOCKET_API_FLAG] = True
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/get_active_calls", vol.Required("entity_ids"): [cv.entity_id]}
+)
+@callback
+def ws_get_active_calls(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+    """Return public ringing state only for requested, readable live cameras."""
+    if connection.user is None:
+        connection.send_error(msg["id"], websocket_api.ERR_UNAUTHORIZED, "Authentication required")
+        return
+    registry = er.async_get(hass)
+    calls = []
+    for entity_id in dict.fromkeys(msg["entity_ids"]):
+        entity = registry.async_get(entity_id)
+        if (
+            entity is None
+            or entity.domain != "camera"
+            or entity.platform != DOMAIN
+            or not connection.user.permissions.check_entity(entity_id, POLICY_READ)
+        ):
+            continue
+        entry_data = hass.data.get(DOMAIN, {}).get(entity.config_entry_id, {})
+        coordinator = entry_data.get("coordinator")
+        if coordinator is not None:
+            call = coordinator.ringing_call
+            if call is not None and call["camera_entity_id"] == entity_id:
+                calls.append(call)
+    connection.send_result(msg["id"], {"calls": calls})
 
 
 @websocket_api.websocket_command(
