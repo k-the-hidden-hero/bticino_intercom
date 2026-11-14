@@ -288,6 +288,14 @@ Add `https://github.com/k-the-hidden-hero/bticino_ha_extras` to HACS as a custom
 
 ### Dashboard card example
 
+The matching companion card can restore incoming-call controls when opened or
+reconnected during the 30-second ringing window. It subscribes to live events,
+then queries `bticino_intercom/get_active_calls` with its configured camera
+`entity_ids`. The authenticated response contains public ring-event fields and
+an `expires_at` Unix timestamp; camera read permissions apply. Finished or expired
+calls are not returned, and querying does not start a call. Update both the
+integration and card, restart Home Assistant, and hard-refresh the browser.
+
 ```yaml
 type: custom:bticino-intercom-card
 intercoms:

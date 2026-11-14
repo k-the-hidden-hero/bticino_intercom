@@ -18,6 +18,7 @@ from pybticino.exceptions import ApiError, AuthError
 from .auth import async_with_auth_retry, is_invalid_token_error
 from .const import (
     CALL_RETRANSMIT_WINDOW,
+    CALL_SENSOR_TIMEOUT,
     CALL_SESSION_MAX_DURATION,
     CLOSED_SESSION_DEDUP_WINDOW,
     DATA_LAST_EVENT,
@@ -104,6 +105,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._seen_status_pushes: dict[str, datetime] = {}
         # Current active call for WebRTC signaling (offer/answer SDP exchange)
         self._active_call: dict[str, Any] | None = None
+        # Public UI state has a shorter lifetime than a media/signaling session.
+        self._ringing_call: dict[str, Any] | None = None
+        self._closed_ringing_session_id: str | None = None
         # Populated by __init__.py after entry setup.
         self.history: EventHistoryStore | None = None
 
@@ -330,6 +334,29 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during data fetch")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
+    @property
+    def ringing_call(self) -> dict[str, Any] | None:
+        """Return a public snapshot for cards opened after the ring."""
+        if self._ringing_call is None or self._ringing_call["expires_at"] <= datetime.now(UTC).timestamp():
+            return None
+        data = self._ringing_call.copy()
+        data["camera_entity_id"] = self._call_camera_entity_id(data["module_id"])
+        return data
+
+    def _call_camera_entity_id(self, module_id: str | None) -> str | None:
+        """Resolve the live camera, including an entity renamed since the ring."""
+        if module_id is None:
+            return None
+        return er.async_get(self.hass).async_get_entity_id(
+            "camera", DOMAIN, f"{self.entry.entry_id}_webrtc_{module_id}"
+        )
+
+    def clear_ringing_call(self, session_id: str | None = None) -> None:
+        """Forget a completed ring without changing the media session."""
+        if self._ringing_call and (session_id is None or self._ringing_call["session_id"] == session_id):
+            self._closed_ringing_session_id = self._ringing_call["session_id"]
+            self._ringing_call = None
+
     def _fire_call_event(
         self,
         event_type: str,
@@ -338,20 +365,20 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         reason: str | None = None,
         snapshot_url: str | None = None,
         vignette_url: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Fire a bticino_intercom_call event for frontend/automations."""
-        session_id = self._active_call.get("session_id") if self._active_call else None
+        session_id = session_id or (self._active_call.get("session_id") if self._active_call else None)
+        if session_id is None and self._ringing_call:
+            session_id = self._ringing_call["session_id"]
+        if event_type == "ring" and session_id and session_id == self._closed_ringing_session_id:
+            return
         module_name = None
-        camera_entity_id = None
+        camera_entity_id = self._call_camera_entity_id(module_id)
 
         if module_id:
             modules = self.data.get("modules", {}) if self.data else {}
             module_name = modules.get(module_id, {}).get("name", module_id)
-            ent_reg = er.async_get(self.hass)
-            for entry in er.async_entries_for_config_entry(ent_reg, self.entry.entry_id):
-                if entry.domain == "camera" and entry.unique_id and module_id in entry.unique_id:
-                    camera_entity_id = entry.entity_id
-                    break
 
         data: dict[str, Any] = {
             "type": event_type,
@@ -364,6 +391,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             data["snapshot_url"] = snapshot_url
             data["vignette_url"] = vignette_url
             data["camera_entity_id"] = camera_entity_id
+            previous = self._ringing_call
+            same_call = previous and previous["session_id"] == session_id and previous["module_id"] == module_id
+            data["expires_at"] = (
+                previous["expires_at"] if same_call else datetime.now(UTC).timestamp() + CALL_SENSOR_TIMEOUT
+            )
+            if same_call:
+                data["snapshot_url"] = snapshot_url or previous["snapshot_url"]
+                data["vignette_url"] = vignette_url or previous["vignette_url"]
+            self._ringing_call = data.copy()
+        if event_type == "end":
+            self.clear_ringing_call(session_id)
         if reason:
             data["reason"] = reason
 
@@ -700,6 +738,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     calling_module_id,
                     snapshot_url=snapshot_url,
                     vignette_url=vignette_url,
+                    session_id=extra_params.get("session_id"),
                 )
 
             self.hass.bus.async_fire(
@@ -711,6 +750,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         if event_type == "missed_call":
             _LOGGER.info("Missed call for %s", device_name)
+            self.clear_ringing_call(extra_params.get("session_id"))
 
             # Turn off binary sensor — device_id here is the bridge MAC, not the
             # external unit module_id, so resolve the unit that rang.
@@ -738,6 +778,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         if event_type == "accepted_call":
             _LOGGER.info("Call accepted for %s", device_name)
+            self.clear_ringing_call(extra_params.get("session_id"))
 
             # Don't clear active_call here — accepted means someone answered,
             # the WebRTC session may still be active on another device
