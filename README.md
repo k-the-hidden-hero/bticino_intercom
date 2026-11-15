@@ -288,6 +288,14 @@ Add `https://github.com/k-the-hidden-hero/bticino_ha_extras` to HACS as a custom
 
 ### Dashboard card example
 
+The companion card can restore incoming-call controls when opened during a ring.
+Each external unit's call binary sensor is the source of ringing state. Its
+`ringing` attribute contains the current call's public `session_id`, `snapshot_url`,
+and `vignette_url` when available, and is `null` when ringing stops. These fields
+are separate from the historical call attributes. The card reads normal HA state
+updates, including for non-admin users; no browser clock or extra query is needed.
+Update both the integration and card, restart HA, and refresh the dashboard.
+
 ```yaml
 type: custom:bticino-intercom-card
 intercoms:

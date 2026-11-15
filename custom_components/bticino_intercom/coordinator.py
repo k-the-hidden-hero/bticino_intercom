@@ -342,9 +342,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         reason: str | None = None,
         snapshot_url: str | None = None,
         vignette_url: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Fire a bticino_intercom_call event for frontend/automations."""
-        session_id = self._active_call.get("session_id") if self._active_call else None
+        session_id = session_id or (self._active_call.get("session_id") if self._active_call else None)
         module_name = None
         camera_entity_id = None
 
@@ -698,7 +699,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             announced_by_rtc_offer = bool(self._active_call)
             calling_module_id = self._resolve_calling_module()
             if calling_module_id:
-                if not announced_by_rtc_offer:
+                if not announced_by_rtc_offer and not self._is_session_recently_closed(extra_params.get("session_id")):
                     # No offer arrived, so this push is the only notice of the
                     # ring we will get — without this the binary_sensor and the
                     # event entity never fire at all (#67, #58).
@@ -709,6 +710,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     calling_module_id,
                     snapshot_url=snapshot_url,
                     vignette_url=vignette_url,
+                    session_id=extra_params.get("session_id"),
                 )
 
             self.hass.bus.async_fire(
@@ -720,6 +722,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         if event_type == "missed_call":
             _LOGGER.info("Missed call for %s", device_name)
+            self._mark_session_closed(
+                extra_params.get("session_id") or (self._active_call.get("session_id") if self._active_call else None)
+            )
 
             # Turn off binary sensor — device_id here is the bridge MAC, not the
             # external unit module_id, so resolve the unit that rang.
@@ -911,6 +916,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         if module_id in self._answered_modules:
             _LOGGER.debug("Ring timer expired on an answered call for %s; leaving it open", module_id)
             return
+        if self._active_call and self._active_call.get("module_id") == module_id:
+            self._mark_session_closed(self._active_call.get("session_id"))
         self._fire_call_event("end", module_id, reason="timeout")
         self._active_call = None
 

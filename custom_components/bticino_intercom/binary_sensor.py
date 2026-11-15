@@ -9,7 +9,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     CALL_SENSOR_TIMEOUT,
     DOMAIN,
+    EVENT_CALL,
     SIGNAL_CALL_RECEIVED,
     SUBTYPE_DOORLOCK,
     SUBTYPE_EXTERNAL_UNIT,
@@ -75,6 +76,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
         """Initialize the call sensor."""
         super().__init__(coordinator, module_id)
         self._turn_off_canceller: Callable[[], None] | None = None
+        self._ringing: dict[str, Any] = {}
         self._attr_unique_id = f"{coordinator.entry.entry_id}_call_{module_id}"
         module_data = coordinator.data.get("modules", {}).get(module_id, {})
         entity_name = module_data.get("name")
@@ -132,7 +134,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes."""
-        return self._attr_extra_state_attributes
+        return {**self._attr_extra_state_attributes, "ringing": self._ringing.copy() if self.is_on else None}
 
     def _update_state(self) -> None:
         """Update the state of the binary sensor."""
@@ -184,6 +186,8 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
         """Handle the dispatcher signal for incoming calls."""
         if module_id == self._module_id:
             _LOGGER.debug("Handling call signal for %s: state=%s", self.entity_id, state)
+            if not state or not self.is_on:
+                self._ringing = {}
             self._attr_is_on = state
             self.async_write_ha_state()
 
@@ -203,11 +207,31 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
             )
 
     @callback
+    def _handle_call_event(self, event: Event) -> None:
+        """Publish current-ring metadata without changing existing automation events."""
+        data = event.data
+        if data.get("entry_id") != self.coordinator.entry.entry_id or data.get("module_id") != self._module_id:
+            return
+        session_id = data.get("session_id")
+        if data["type"] == "ring" and self.is_on:
+            if session_id and self.coordinator._is_session_recently_closed(session_id):
+                return
+            if session_id and self._ringing.get("session_id") not in (None, session_id):
+                self._ringing = {}
+            for key in ("session_id", "snapshot_url", "vignette_url"):
+                if data.get(key) is not None:
+                    self._ringing[key] = data[key]
+            self.async_write_ha_state()
+        elif data["type"] == "end" and (not session_id or self._ringing.get("session_id") in (None, session_id)):
+            self._handle_call_received(False, self._module_id)
+
+    @callback
     def _turn_off_callback(self, *args: Any) -> None:
         """Turn the sensor off after timeout."""
         _LOGGER.debug("Executing turn-off callback for %s", self.entity_id)
         self._turn_off_canceller = None
         self._attr_is_on = False
+        self._ringing = {}
         self.async_write_ha_state()
         self.coordinator.fire_call_timeout(self._module_id)
 
@@ -215,6 +239,7 @@ class BticinoCallBinarySensor(BticinoEntity, BinarySensorEntity):
         """Register callbacks when entity is added."""
         await super().async_added_to_hass()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CALL_RECEIVED, self._handle_call_received))
+        self.async_on_remove(self.hass.bus.async_listen(EVENT_CALL, self._handle_call_event))
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
