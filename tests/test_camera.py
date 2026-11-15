@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestExtractImageFromEvent:
     """Test _extract_image_from_event for both WS and API event formats."""
@@ -353,6 +355,27 @@ class TestReorderMlines:
         )
         result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
         assert result == answer
+
+    @pytest.mark.parametrize("media_order", [("audio", "video"), ("video", "audio")])
+    @pytest.mark.parametrize("trailing_crlf", ["\r\n", ""])
+    def test_reordering_preserves_valid_line_endings(self, media_order: tuple[str, str], trailing_crlf: str) -> None:
+        """A terminal CRLF must stay at the end when its media section moves."""
+        from custom_components.bticino_intercom.camera import BticinoWebRTCCamera
+
+        session = "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE video0 audio1\r\n"
+        sections = {
+            "audio": ("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:audio1\r\na=sendrecv\r\na=rtpmap:111 opus/48000/2\r\n"),
+            "video": ("m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:video0\r\na=sendonly\r\na=rtpmap:96 H264/90000\r\n"),
+        }
+        first, second = media_order
+        offer = session + sections[first] + sections[second]
+        answer = (session + sections[second] + sections[first]).removesuffix("\r\n") + trailing_crlf
+
+        result = BticinoWebRTCCamera._reorder_mlines(answer, offer)
+
+        assert "\r\n\r\n" not in result
+        assert result.endswith("\r\n")
+        assert result == offer  # Only the section order and terminal CRLF change.
 
     def test_mismatched_order_reordered(self) -> None:
         """When offer is (audio, video) but answer is (video, audio), reorder."""
