@@ -1,6 +1,6 @@
 [project]
 name = "bticino_intercom"
-version = "2.0.5rc1"
+version = "2.0.5rc2"
 requires-python = ">=3.14"
 
 [tool.ruff]
