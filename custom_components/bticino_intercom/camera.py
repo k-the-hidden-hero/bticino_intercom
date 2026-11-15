@@ -668,8 +668,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         if offer_order == answer_order:
             return answer_sdp
 
-        # Split answer SDP into session-level lines and m-sections
-        lines = answer_sdp.split("\r\n")
+        # Keep the terminal CRLF out of the media sections: an empty item
+        # would become an invalid blank line when the last section moves.
+        lines = answer_sdp.removesuffix("\r\n").split("\r\n")
         session_lines: list[str] = []
         sections: dict[str, list[str]] = {}
         current_type: str | None = None
@@ -689,7 +690,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             if mtype in sections:
                 result.extend(sections[mtype])
 
-        return "\r\n".join(result)
+        return "\r\n".join(result) + "\r\n"
 
     @staticmethod
     def _split_sdp_sections(sdp: str) -> tuple[list[str], list[list[str]]]:
