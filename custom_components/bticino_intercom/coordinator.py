@@ -104,6 +104,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         self._seen_status_pushes: dict[str, datetime] = {}
         # Current active call for WebRTC signaling (offer/answer SDP exchange)
         self._active_call: dict[str, Any] | None = None
+        # Units whose current ring has been picked up, here or elsewhere. The
+        # ring timer leaves these calls alone: they end with the device's
+        # terminate or with whoever hangs up (#72).
+        self._answered_modules: set[str] = set()
         # Populated by __init__.py after entry setup.
         self.history: EventHistoryStore | None = None
 
@@ -504,6 +508,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
             # Dispatch signal for binary sensor
             if calling_module_id:
+                self._answered_modules.discard(calling_module_id)
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
 
             self._fire_call_event("ring", calling_module_id)
@@ -694,6 +699,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                     # No offer arrived, so this push is the only notice of the
                     # ring we will get — without this the binary_sensor and the
                     # event entity never fire at all (#67, #58).
+                    self._answered_modules.discard(calling_module_id)
                     async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, True, calling_module_id)
                 self._fire_call_event(
                     "ring",
@@ -741,6 +747,9 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
             # Don't clear active_call here — accepted means someone answered,
             # the WebRTC session may still be active on another device
+            calling_module = self._resolve_calling_module()
+            if calling_module:
+                self.mark_call_answered(calling_module)
 
             self.data[DATA_LAST_EVENT] = {
                 "type": EVENT_TYPE_ACCEPTED_CALL,
@@ -889,8 +898,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return False
         return (datetime.now(UTC) - closed_at).total_seconds() < CLOSED_SESSION_DEDUP_WINDOW
 
+    def mark_call_answered(self, module_id: str) -> None:
+        """Record that the unit's current ring was picked up, and stop the ringing."""
+        self._answered_modules.add(module_id)
+        async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
+
     def fire_call_timeout(self, module_id: str) -> None:
-        """Fire an end event when the call times out."""
+        """Fire an end event when a ring nobody answered times out."""
+        if module_id in self._answered_modules:
+            _LOGGER.debug("Ring timer expired on an answered call for %s; leaving it open", module_id)
+            return
         self._fire_call_event("end", module_id, reason="timeout")
         self._active_call = None
 

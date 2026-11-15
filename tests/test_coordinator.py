@@ -1151,6 +1151,94 @@ class TestPartialTopologyCarryForward:
 # =============================================================================
 
 
+class TestAnsweredCallRingTimeout:
+    """The ring timer must not end a call that has been answered (#72).
+
+    The call binary_sensor's 30 s timer fires ``end`` with ``reason=timeout``,
+    and the card hangs up on it. That is right for a ring nobody picks up, but
+    an answered call lasts longer than the ring: its end comes from the device
+    (``terminate``) or from whoever hangs up.
+    """
+
+    @staticmethod
+    def _end_events(events: list) -> list:
+        return [e for e in events if e.data.get("type") == "end"]
+
+    async def test_timeout_after_accepted_call_fires_no_end_event(
+        self, hass, coordinator, ws_rtc_offer, ws_accepted_call
+    ) -> None:
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_accepted_call)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, EVENT_CALL)
+        coordinator.fire_call_timeout(EXTERNAL_UNIT_ID)
+        await hass.async_block_till_done()
+
+        assert self._end_events(events) == []
+        # the device's terminate still needs the session id to end the call
+        assert coordinator.active_call is not None
+
+    async def test_timeout_after_home_assistant_answered_fires_no_end_event(
+        self, hass, coordinator, ws_rtc_offer
+    ) -> None:
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        coordinator.mark_call_answered(EXTERNAL_UNIT_ID)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, EVENT_CALL)
+        coordinator.fire_call_timeout(EXTERNAL_UNIT_ID)
+        await hass.async_block_till_done()
+
+        assert self._end_events(events) == []
+
+    async def test_accepted_call_stops_the_ringing_sensor(self, coordinator, ws_rtc_offer, ws_accepted_call) -> None:
+        """The sensor means "ringing": once the call is picked up it turns off."""
+        await coordinator._process_websocket_event(ws_rtc_offer)
+
+        signals = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            await coordinator._process_websocket_event(ws_accepted_call)
+
+        assert (False, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
+
+    async def test_status_only_ring_accepted_fires_no_end_on_timeout(
+        self, hass, coordinator, ws_incoming_call, ws_accepted_call
+    ) -> None:
+        """BDIY rings arrive as incoming_call alone, with no RTC offer."""
+        del coordinator.data["modules"][EXTERNAL_UNIT_2_ID]
+        await coordinator._process_websocket_event(ws_incoming_call)
+        await coordinator._process_websocket_event(ws_accepted_call)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, EVENT_CALL)
+        coordinator.fire_call_timeout(EXTERNAL_UNIT_ID)
+        await hass.async_block_till_done()
+
+        assert self._end_events(events) == []
+
+    async def test_next_ring_after_an_answered_call_times_out_again(
+        self, hass, coordinator, ws_rtc_offer, ws_rtc_terminate
+    ) -> None:
+        """Answering one call must not keep the next, unanswered one ringing."""
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        coordinator.mark_call_answered(EXTERNAL_UNIT_ID)
+        await coordinator._process_websocket_event(ws_rtc_terminate)
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await hass.async_block_till_done()
+
+        events = async_capture_events(hass, EVENT_CALL)
+        coordinator.fire_call_timeout(EXTERNAL_UNIT_ID)
+        await hass.async_block_till_done()
+
+        end_events = self._end_events(events)
+        assert len(end_events) == 1
+        assert end_events[0].data["reason"] == "timeout"
+
+
 class TestStatusPushWithoutRtcOffer:
     """Bridges that never send an RTC offer must still drive the call entities.
 

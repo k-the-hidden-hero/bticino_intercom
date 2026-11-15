@@ -154,6 +154,33 @@ async def test_answer_mode_when_active_call(
     assert answer_messages[0].answer == "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\na=setup:actpass\r\n"
 
 
+async def test_answering_marks_the_call_answered(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+) -> None:
+    """After Home Assistant answers, the ring timer must not end the call (#72)."""
+    camera = _get_webrtc_camera(hass, mock_setup_entry)
+    camera.coordinator._active_call = {
+        "session_id": "sess_incoming",
+        "tag_id": "tag123",
+        "device_id": BRIDGE_MAC,
+        "module_id": camera._module_id,
+        "sdp": "v=0\r\no=- 1 0 IN IP4 0.0.0.0\r\na=setup:actpass\r\n",
+    }
+    signaling = hass.data[DOMAIN][mock_setup_entry.entry_id]["signaling_client"]
+    signaling.send_answer = AsyncMock()
+    signaling.send_offer = AsyncMock(return_value="sess_new")
+    signaling._is_connected = True
+    signaling.is_connected = True
+
+    with patch.object(camera.coordinator, "mark_call_answered") as mark_call_answered:
+        await camera.async_handle_async_webrtc_offer(
+            "v=0\r\no=- 9 0 IN IP4 0.0.0.0\r\na=setup:actpass\r\n", "test_session", [].append
+        )
+
+    mark_call_answered.assert_called_once_with(camera._module_id)
+
+
 async def test_answer_mode_only_for_matching_module(
     hass: HomeAssistant,
     mock_setup_entry: MockConfigEntry,

@@ -979,6 +979,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                 answer_sdp = self.convert_offer_to_answer_sdp(offer_sdp)
                 await self._signaling.send_answer(answer_sdp, session_id=call_session)
                 self._answered_call_session = call_session
+                self.coordinator.mark_call_answered(self._module_id)
 
                 # Send the device's original offer to the browser as the "answer".
                 # The browser needs a remote SDP to complete the WebRTC handshake.
