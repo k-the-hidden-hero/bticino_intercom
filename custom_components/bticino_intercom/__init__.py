@@ -17,6 +17,7 @@ from homeassistant.const import (
     # CONF_CLIENT_SECRET, # Keep commented out
     EVENT_HOMEASSISTANT_START,
     EVENT_HOMEASSISTANT_STOP,
+    STATE_ON,
 )
 from homeassistant.core import (
     CoreState,  # Re-add CoreState for check
@@ -28,6 +29,7 @@ from homeassistant.core import (
     Event as HAEvent,  # Re-add HAEvent type hint
 )
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from pybticino import AsyncAccount, AuthHandler, SignalingClient, WebsocketClient
@@ -256,12 +258,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coord = entry_data[COORDINATOR_KEY]
         sig = entry_data[SIGNALING_CLIENT_KEY]
 
-        if not coord.active_call:
-            _LOGGER.debug("reject_call: no active call to reject")
+        active_call = coord.active_call or {}
+        module_id = active_call.get("module_id") or coord._resolve_calling_module()
+        if module_id is None:
             return
-
-        module_id = coord.active_call.get("module_id")
-        session_id = coord.active_call.get("session_id")
+        ring_session_id = active_call.get("session_id")
+        if not active_call:
+            sensor_id = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{entry_id}_call_{module_id}")
+            sensor = hass.states.get(sensor_id) if sensor_id else None
+            if sensor is None or sensor.state != STATE_ON:
+                _LOGGER.debug("reject_call: no active call to reject")
+                return
+            ring_session_id = (sensor.attributes.get("ringing") or {}).get("session_id")
+        session_id = active_call.get("session_id")
         if session_id:
             # Name the call's own session: without an id the signaling client
             # falls back to its most recent one, which may be a live view.
@@ -272,7 +281,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return
         else:
             _LOGGER.debug("reject_call: the call has no signaling session, nothing to terminate")
-        coord._fire_call_event("end", module_id, reason="rejected")
+        coord._mark_session_closed(ring_session_id)
+        coord._fire_call_event("end", module_id, reason="rejected", session_id=ring_session_id)
         coord._active_call = None
 
     hass.services.async_register(DOMAIN, "reject_call", _async_reject_call)
