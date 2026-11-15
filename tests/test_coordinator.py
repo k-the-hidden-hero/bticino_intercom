@@ -76,6 +76,38 @@ class TestRtcOffer:
             device_id=BRIDGE_MAC,
         )
 
+    @pytest.mark.parametrize(
+        ("push_value", "expected"),
+        [
+            pytest.param(None, "", id="null"),
+            pytest.param(..., "", id="missing"),
+            pytest.param(1499514006757899539, "1499514006757899539", id="number"),
+        ],
+    )
+    async def test_offer_passes_a_usable_correlation_id(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        push_value: object,
+        expected: str,
+    ) -> None:
+        """A missing or null correlation id reaches pybticino as "", never as "None".
+
+        pybticino matches the answer's ack on this id: "" tells it there is
+        nothing to match, while "None" makes it wait the whole timeout for an
+        ack that never comes (pybticino#32).
+        """
+        if push_value is ...:
+            del ws_rtc_offer["extra_params"]["correlation_id"]
+        else:
+            ws_rtc_offer["extra_params"]["correlation_id"] = push_value
+        mock_signaling = MagicMock()
+        coordinator._signaling_client = mock_signaling
+
+        await coordinator._process_websocket_event(ws_rtc_offer)
+
+        assert mock_signaling.set_session_from_push.call_args.kwargs["correlation_id"] == expected
+
     async def test_offer_without_signaling_client_does_not_crash(
         self, coordinator: BticinoIntercomCoordinator, ws_rtc_offer: dict
     ) -> None:
