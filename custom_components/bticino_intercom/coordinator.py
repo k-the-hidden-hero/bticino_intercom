@@ -456,10 +456,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
             # Prepare the signaling client for answer-mode WebRTC
             if self._signaling_client:
+                # pybticino matches the answer's ack on this id. "" says there
+                # is none; str(None) would make it wait for an ack under "None".
+                correlation_id = extra_params.get("correlation_id")
                 self._signaling_client.set_session_from_push(
                     session_id=session_id,
                     tag_id=extra_params.get("tag_id", ""),
-                    correlation_id=str(extra_params.get("correlation_id", "")),
+                    correlation_id="" if correlation_id is None else str(correlation_id),
                     device_id=device_id,
                 )
                 _LOGGER.debug("Signaling session set from push offer: session_id=%s", session_id)
