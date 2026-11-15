@@ -637,8 +637,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         message: dict[str, Any],
         extra_params: dict[str, Any],
         event_type: str,
+        *,
+        calling_module_id: str | None = None,
+        record_history: bool = True,
     ) -> bool:
-        """Process a status event (incoming_call, missed_call, accepted_call)."""
+        """Process a status event (incoming_call, missed_call, accepted_call).
+
+        ``calling_module_id`` and ``record_history`` are for test rings
+        (``async_inject_incoming_call``): a real push names no unit and is
+        always recorded.
+        """
         if self._is_duplicate_status_push(event_type, extra_params):
             _LOGGER.debug(
                 "Ignoring duplicate %s push for session %s",
@@ -665,7 +673,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
             # Download images to local storage BEFORE firing events,
             # so automations/notifications have images available immediately.
-            if self.history is not None and device_id:
+            if record_history and self.history is not None and device_id:
                 await self.history.async_record_call(
                     event_id=event_id,
                     module_id=device_id,
@@ -697,7 +705,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             # announced the ring: the offer path dispatches the signal itself,
             # so re-sending it there would only restart the auto-off timer.
             announced_by_rtc_offer = bool(self._active_call)
-            calling_module_id = self._resolve_calling_module()
+            calling_module_id = calling_module_id or self._resolve_calling_module()
             if calling_module_id:
                 if not announced_by_rtc_offer and not self._is_session_recently_closed(extra_params.get("session_id")):
                     # No offer arrived, so this push is the only notice of the
@@ -959,6 +967,31 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
     def last_ws_message_time(self) -> datetime | None:
         """Return when the last application-level WebSocket message arrived."""
         return self._last_ws_message_time
+
+    async def async_inject_incoming_call(
+        self,
+        extra_params: dict[str, Any],
+        *,
+        calling_module_id: str | None = None,
+        record_history: bool = False,
+    ) -> None:
+        """Ring as an ``incoming_call`` push with no RTC offer would (debug service).
+
+        A real push names the bridge, not the unit that rang, so a home with
+        several units can't tell which one it was; ``calling_module_id`` says
+        it. The call history is left alone unless ``record_history`` is set,
+        and no API poll follows.
+        """
+        message = {"push_type": "BNC1-incoming_call", "extra_params": extra_params}
+        _LOGGER.debug("Injecting test event: %s", message)
+        if await self._process_status_event(
+            message,
+            extra_params,
+            "incoming_call",
+            calling_module_id=calling_module_id,
+            record_history=record_history,
+        ):
+            self.async_update_listeners()
 
     async def _handle_websocket_message(self, message: dict[str, Any]) -> None:
         """Handle incoming WebSocket messages."""

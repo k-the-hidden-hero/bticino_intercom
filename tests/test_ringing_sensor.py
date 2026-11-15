@@ -1,9 +1,12 @@
 """Current ringing state is readable without a custom-event subscription."""
 
+import logging
 from copy import deepcopy
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from pytest_homeassistant_custom_component.common import async_capture_events, async_fire_time_changed
 
@@ -15,7 +18,7 @@ from custom_components.bticino_intercom.const import (
     SIGNAL_CALL_RECEIVED,
 )
 
-from .conftest import EXTERNAL_UNIT_2_ID, EXTERNAL_UNIT_ID, SESSION_ID
+from .conftest import DOORLOCK_ID, EXTERNAL_UNIT_2_ID, EXTERNAL_UNIT_ID, SESSION_ID
 
 
 @pytest.fixture
@@ -206,3 +209,82 @@ async def test_new_session_replaces_images_and_ignores_an_old_end(hass, live_rin
     coord._fire_call_event("end", EXTERNAL_UNIT_ID, session_id=SESSION_ID)
     await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "on"
+
+
+@pytest.fixture
+def debug_logging(caplog):
+    """The test-ring service exists only while the integration logs at DEBUG."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.bticino_intercom")
+
+
+@pytest.fixture
+def test_ring(hass, debug_logging, live_ring):
+    """Both external units are present, so a push alone can't name one."""
+    coord, _ = live_ring
+    assert EXTERNAL_UNIT_2_ID in coord.data["modules"]
+    coord.history = AsyncMock()
+
+    def module_entity(domain, module_id):
+        return next(
+            state.entity_id for state in hass.states.async_all(domain) if state.attributes.get("module_id") == module_id
+        )
+
+    return coord, module_entity
+
+
+async def test_test_ring_rings_the_named_entrance(hass, test_ring):
+    coord, module_entity = test_ring
+    sensor_2 = module_entity("binary_sensor", EXTERNAL_UNIT_2_ID)
+    events = async_capture_events(hass, EVENT_CALL)
+    await hass.services.async_call(
+        DOMAIN,
+        "inject_test_event",
+        {"camera": module_entity("camera", EXTERNAL_UNIT_2_ID), "session_id": "test-1"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    state = hass.states.get(sensor_2)
+    assert state.state == "on"
+    assert state.attributes["ringing"]["session_id"] == "test-1"
+    assert hass.states.get(module_entity("binary_sensor", EXTERNAL_UNIT_ID)).state == "off"
+    assert [(e.data["type"], e.data["module_id"]) for e in events] == [("ring", EXTERNAL_UNIT_2_ID)]
+    coord.history.async_record_call.assert_not_awaited()
+
+
+async def test_test_ring_records_history_only_when_asked(hass, test_ring):
+    coord, module_entity = test_ring
+    await hass.services.async_call(
+        DOMAIN,
+        "inject_test_event",
+        {"camera": module_entity("camera", EXTERNAL_UNIT_ID), "record_history": True},
+        blocking=True,
+    )
+    coord.history.async_record_call.assert_awaited_once()
+
+
+async def test_test_ring_needs_an_entrance_camera(hass, test_ring):
+    _, module_entity = test_ring
+    lock = module_entity("lock", DOORLOCK_ID)
+    # ServiceNotFound is a ServiceValidationError too: match the message.
+    with pytest.raises(ServiceValidationError, match="is not an entrance"):
+        await hass.services.async_call(DOMAIN, "inject_test_event", {"camera": lock}, blocking=True)
+
+
+async def test_status_only_ring_is_rejected_among_several_units(hass, test_ring, mock_signaling_client):
+    coord, module_entity = test_ring
+    sensor_2 = module_entity("binary_sensor", EXTERNAL_UNIT_2_ID)
+    await hass.services.async_call(
+        DOMAIN,
+        "inject_test_event",
+        {"camera": module_entity("camera", EXTERNAL_UNIT_2_ID), "session_id": "test-2"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    events = async_capture_events(hass, EVENT_CALL)
+    await hass.services.async_call(DOMAIN, "reject_call", {"entry_id": coord.entry.entry_id}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(sensor_2).state == "off"
+    assert [(e.data["type"], e.data["module_id"], e.data["session_id"], e.data["reason"]) for e in events] == [
+        ("end", EXTERNAL_UNIT_2_ID, "test-2", "rejected")
+    ]
+    mock_signaling_client.send_terminate.assert_not_called()

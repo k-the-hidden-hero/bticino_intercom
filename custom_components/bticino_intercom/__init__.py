@@ -5,6 +5,7 @@ import logging
 import random
 from contextlib import suppress
 
+import voluptuous as vol
 import websockets  # Import websockets for exception handling
 from homeassistant import (
     config_entries,
@@ -28,7 +29,8 @@ from homeassistant.core import (
 from homeassistant.core import (
     Event as HAEvent,  # Re-add HAEvent type hint
 )
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
@@ -39,11 +41,13 @@ from .auth import async_with_auth_retry
 from .const import (
     DOMAIN,
     PLATFORMS,
+    SUBTYPE_EXTERNAL_UNIT,
     TOKEN_STORAGE_VERSION,
 )
 from .coordinator import BticinoIntercomCoordinator
 from .history import EventHistoryStore, get_history_options
 from .media_source import BticinoHistoryImageView
+from .utils import get_module_subtype
 from .websocket_api import async_register_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
@@ -224,25 +228,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if _LOGGER.isEnabledFor(logging.DEBUG):
         import time as _time
 
-        async def _inject_test_event(call) -> None:
+        async def _inject_test_event(call: ServiceCall) -> None:
             device_id = call.data.get("device_id") or next(iter(coordinator.data.get("modules", {})), None)
             if not device_id:
                 _LOGGER.warning("inject_test_event: no modules available")
                 return
-            fake_msg = {
-                "push_type": "BNC1-incoming_call",
-                "extra_params": {
+            calling_module_id = None
+            if camera := call.data.get("camera"):
+                # Any entity of a unit carries its module_id; with several
+                # units the push alone can't say which one rang.
+                state = hass.states.get(camera)
+                calling_module_id = state.attributes.get("module_id") if state else None
+                module = coordinator.data.get("modules", {}).get(calling_module_id, {})
+                if get_module_subtype(module) != SUBTYPE_EXTERNAL_UNIT:
+                    raise ServiceValidationError(f"inject_test_event: {camera} is not an entrance's camera")
+            await coordinator.async_inject_incoming_call(
+                {
                     "event_type": "incoming_call",
                     "device_id": device_id,
                     "session_id": call.data.get("session_id", f"test-{int(_time.time())}"),
                     "snapshot_url": call.data.get("snapshot_url", "https://picsum.photos/640/480"),
                     "vignette_url": call.data.get("vignette_url", "https://picsum.photos/160/120"),
                 },
-            }
-            _LOGGER.debug("Injecting test event: %s", fake_msg)
-            await coordinator._handle_websocket_message(fake_msg)
+                calling_module_id=calling_module_id,
+                record_history=call.data["record_history"],
+            )
 
-        hass.services.async_register(DOMAIN, "inject_test_event", _inject_test_event)
+        hass.services.async_register(
+            DOMAIN,
+            "inject_test_event",
+            _inject_test_event,
+            schema=vol.Schema(
+                {
+                    vol.Optional("camera"): cv.entity_id,
+                    vol.Optional("device_id"): cv.string,
+                    vol.Optional("session_id"): cv.string,
+                    vol.Optional("snapshot_url"): cv.string,
+                    vol.Optional("vignette_url"): cv.string,
+                    vol.Optional("record_history", default=False): cv.boolean,
+                }
+            ),
+        )
         _LOGGER.debug("Debug service 'inject_test_event' registered (logger at DEBUG)")
 
     # --- Register reject_call service ---
@@ -259,14 +285,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sig = entry_data[SIGNALING_CLIENT_KEY]
 
         active_call = coord.active_call or {}
-        module_id = active_call.get("module_id") or coord._resolve_calling_module()
-        if module_id is None:
-            return
-        ring_session_id = active_call.get("session_id")
-        if not active_call:
-            sensor_id = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{entry_id}_call_{module_id}")
-            sensor = hass.states.get(sensor_id) if sensor_id else None
-            if sensor is None or sensor.state != STATE_ON:
+        if active_call:
+            module_id = active_call.get("module_id") or coord._resolve_calling_module()
+            if module_id is None:
+                return
+            ring_session_id = active_call.get("session_id")
+        else:
+            # A ring with no RTC offer: the call sensor that is on names the
+            # unit, which the push itself does not when there are several.
+            registry = er.async_get(hass)
+            for module_id in coord.data.get("modules", {}):
+                sensor_id = registry.async_get_entity_id("binary_sensor", DOMAIN, f"{entry_id}_call_{module_id}")
+                sensor = hass.states.get(sensor_id) if sensor_id else None
+                if sensor is not None and sensor.state == STATE_ON:
+                    break
+            else:
                 _LOGGER.debug("reject_call: no active call to reject")
                 return
             ring_session_id = (sensor.attributes.get("ringing") or {}).get("session_id")
