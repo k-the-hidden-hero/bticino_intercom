@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import entity_registry as er
 from pybticino.exceptions import ApiError, AuthError
 from pytest_homeassistant_custom_component.common import (
@@ -15,8 +16,10 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.bticino_intercom import (
     RUNTIME_RETRY_DELAYS,
+    WEBSOCKET_CLIENT_KEY,
     WS_STABLE_CONNECTION_SECONDS,
     _next_websocket_retry,
+    _refresh_push_connection,
     _wait_for_websocket_listener,
 )
 from custom_components.bticino_intercom.const import DOMAIN
@@ -100,6 +103,139 @@ async def test_listener_timeout_then_exception_is_consumed_by_manager() -> None:
         await _wait_for_websocket_listener(listener_task, timeout=1)
 
     assert listener_task.done()
+
+
+class TestPushConnectionRefresh:
+    """A Subscribe sent again on the same socket adds a subscription, and every
+    push then arrives once more (5 copies of each push after four hourly
+    re-subscribes on 2026-11-16). The fresh token goes on a new connection."""
+
+    @pytest.fixture
+    def clients(self, hass: HomeAssistant, mock_config_entry: MockConfigEntry):
+        """The current connection, the one replacing it, and the order things happen in."""
+        order: list[str] = []
+        current = AsyncMock()
+        current.disconnect.side_effect = lambda: order.append("close current")
+        fresh = AsyncMock()
+        fresh.connect.side_effect = lambda: order.append("open fresh")
+        coordinator = MagicMock(websocket_client=current)
+        hass.data[DOMAIN] = {mock_config_entry.entry_id: {WEBSOCKET_CLIENT_KEY: current}}
+        return current, fresh, coordinator, order
+
+    async def test_opens_the_new_connection_before_closing_the_old(
+        self, hass: HomeAssistant, mock_config_entry: MockConfigEntry, clients
+    ) -> None:
+        """No push falls in a gap: the old connection closes once the new one is subscribed."""
+        current, fresh, coordinator, order = clients
+
+        with patch("custom_components.bticino_intercom.WebsocketClient", return_value=fresh):
+            kept = await _refresh_push_connection(hass, mock_config_entry, MagicMock(), coordinator, current)
+
+        assert kept is fresh
+        assert order == ["open fresh", "close current"]
+        assert coordinator.websocket_client is fresh
+        assert hass.data[DOMAIN][mock_config_entry.entry_id][WEBSOCKET_CLIENT_KEY] is fresh
+
+    async def test_keeps_the_current_connection_when_the_new_one_fails(
+        self, hass: HomeAssistant, mock_config_entry: MockConfigEntry, clients
+    ) -> None:
+        """The current connection still works, so a failed attempt changes nothing."""
+        current, fresh, coordinator, _ = clients
+        fresh.connect.side_effect = ApiError(503, "Service Unavailable")
+
+        with patch("custom_components.bticino_intercom.WebsocketClient", return_value=fresh):
+            kept = await _refresh_push_connection(hass, mock_config_entry, MagicMock(), coordinator, current)
+
+        assert kept is current
+        current.disconnect.assert_not_awaited()
+        assert coordinator.websocket_client is current
+        assert hass.data[DOMAIN][mock_config_entry.entry_id][WEBSOCKET_CLIENT_KEY] is current
+
+    async def test_cancelled_refresh_closes_the_new_connection(
+        self, hass: HomeAssistant, mock_config_entry: MockConfigEntry, clients
+    ) -> None:
+        """An unload during the refresh must not leave a subscribed socket behind.
+
+        It would keep handing pushes to the unloaded coordinator, which still
+        fires its events.
+        """
+        current, fresh, coordinator, _ = clients
+        fresh.connect.side_effect = asyncio.CancelledError
+
+        with (
+            patch("custom_components.bticino_intercom.WebsocketClient", return_value=fresh),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _refresh_push_connection(hass, mock_config_entry, MagicMock(), coordinator, current)
+
+        fresh.disconnect.assert_awaited_once()
+        current.disconnect.assert_not_awaited()
+
+    async def test_rejected_credentials_still_request_reauth(
+        self, hass: HomeAssistant, mock_config_entry: MockConfigEntry, clients
+    ) -> None:
+        """The manager handles reauth and closes the current connection itself."""
+        current, fresh, coordinator, _ = clients
+        fresh.connect.side_effect = AuthError("Bad credentials")
+
+        with (
+            patch("custom_components.bticino_intercom.WebsocketClient", return_value=fresh),
+            patch("custom_components.bticino_intercom.auth.async_clear_tokens", new_callable=AsyncMock),
+            pytest.raises(ConfigEntryAuthFailed),
+        ):
+            await _refresh_push_connection(hass, mock_config_entry, MagicMock(), coordinator, current)
+
+        current.disconnect.assert_not_awaited()
+
+    async def test_manager_follows_the_new_connection(
+        self,
+        hass: HomeAssistant,
+        mock_config_entry: MockConfigEntry,
+        mock_auth_handler: AsyncMock,
+        mock_account: AsyncMock,
+        mock_websocket_client: AsyncMock,
+        mock_signaling_client: AsyncMock,
+    ) -> None:
+        """After the refresh the manager waits on the new listener, and closes it on shutdown."""
+        old_listener = asyncio.create_task(asyncio.Event().wait())
+        new_listener = asyncio.create_task(asyncio.Event().wait())
+        mock_websocket_client.get_listener_task.return_value = old_listener
+        fresh = AsyncMock()
+        fresh.get_listener_task = MagicMock(return_value=new_listener)
+        refresh_due = asyncio.Event()
+        watching_new = asyncio.Event()
+
+        async def wait_for_listener(listener: asyncio.Task, timeout: float) -> bool:
+            if listener is old_listener:
+                await refresh_due.wait()
+                return False
+            watching_new.set()
+            await asyncio.Event().wait()
+            return True
+
+        with (
+            # Setup creates the first client; every later one is the fresh one.
+            patch("custom_components.bticino_intercom.WebsocketClient", return_value=fresh),
+            patch("custom_components.bticino_intercom.PUSH_CONNECTION_REFRESH_INTERVAL", 0),
+            patch("custom_components.bticino_intercom._wait_for_websocket_listener", side_effect=wait_for_listener),
+        ):
+            entry = await _setup_integration(
+                hass, mock_config_entry, mock_auth_handler, mock_account, mock_websocket_client, mock_signaling_client
+            )
+            manager = hass.data[DOMAIN][entry.entry_id]["websocket_connection_task"]
+            refresh_due.set()
+            await asyncio.wait_for(watching_new.wait(), timeout=5)
+
+            fresh.connect.assert_awaited_once()
+            mock_websocket_client.disconnect.assert_awaited_once()
+            assert hass.data[DOMAIN][entry.entry_id][WEBSOCKET_CLIENT_KEY] is fresh
+
+            manager.cancel()
+            await manager
+
+        fresh.disconnect.assert_awaited_once()
+        assert new_listener.cancelled()
+        old_listener.cancel()
 
 
 async def test_setup_entry_success(

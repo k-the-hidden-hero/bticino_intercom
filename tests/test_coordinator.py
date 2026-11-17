@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -847,11 +848,103 @@ class TestRtcTerminateDedup:
         assert mock_refresh.call_count == 1
 
 
+class TestOfferCopies:
+    """An offer arrives as several pushes, each with its own ``tag_id``, and
+    each of them once more for every Subscribe on the push socket: 45 copies
+    of one ring on 2026-11-16. Only the first copy is the call."""
+
+    @staticmethod
+    def _copies(offer: dict, count: int) -> list[dict]:
+        return [{**offer, "extra_params": {**offer["extra_params"], "tag_id": f"tag-{n}"}} for n in range(count)]
+
+    async def test_copies_keep_the_first_offer(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Copies change neither the call nor the signaling session, nor log the call again."""
+        signaling = MagicMock()
+        coordinator._signaling_client = signaling
+
+        with caplog.at_level(logging.INFO, logger="custom_components.bticino_intercom.coordinator"):
+            results = [await coordinator._process_websocket_event(copy) for copy in self._copies(ws_rtc_offer, 9)]
+
+        assert results == [True] + [False] * 8
+        assert coordinator.active_call["tag_id"] == "tag-0"
+        signaling.set_session_from_push.assert_called_once()
+        assert signaling.set_session_from_push.call_args.kwargs["tag_id"] == "tag-0"
+        assert caplog.text.count("Incoming call (RTC offer)") == 1
+
+    async def test_a_copy_after_the_call_ended_does_not_ring_again(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        ws_rtc_rescind: dict,
+    ) -> None:
+        """A copy that comes in after the rescind belongs to the call that just ended."""
+        events = async_capture_events(hass, EVENT_CALL)
+
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_rescind)
+        late_copy = self._copies(ws_rtc_offer, 2)[1]
+        assert await coordinator._process_websocket_event(late_copy) is False
+        await hass.async_block_till_done()
+
+        assert [event.data["type"] for event in events] == ["ring", "end"]
+        assert coordinator.active_call is None
+
+
+class TestStatusPushAfterTheCallEnded:
+    """On 2026-11-16 a ring answered on the monitor sent the rescind first and
+    the accepted_call 0.5 s later. By then the call was over, and with two
+    external units the push logged a warning that it could not tell which one
+    rang."""
+
+    async def test_accepted_call_after_rescind_does_not_warn(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        ws_rtc_rescind: dict,
+        ws_accepted_call: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The rescind has closed the call; the accepted_call is still recorded."""
+        ws_accepted_call["extra_params"]["session_id"] = SESSION_ID
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_rescind)
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.bticino_intercom.coordinator"):
+            assert await coordinator._process_websocket_event(ws_accepted_call) is True
+
+        assert "cannot tell which one rang" not in caplog.text
+        assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_ACCEPTED_CALL
+
+    async def test_missed_call_after_terminate_does_not_warn(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+        ws_rtc_terminate: dict,
+        ws_missed_call: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The same holds for a missed_call after the terminate."""
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(ws_rtc_terminate)
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.bticino_intercom.coordinator"):
+            assert await coordinator._process_websocket_event(ws_missed_call) is True
+
+        assert "cannot tell which one rang" not in caplog.text
+        assert coordinator.data[DATA_LAST_EVENT]["type"] == EVENT_TYPE_MISSED_CALL
+
+
 class TestStatusPushDedup:
-    """Regression tests for #106: Netatmo delivers one copy of every push per
-    registration on the account (#56), so a single ring can arrive as dozens of
-    identical ``incoming_call`` pushes. Each copy used to fire its own ``ring``
-    event (one notification per copy) and its own API refresh (429)."""
+    """Regression tests for #106: a single ring can arrive as dozens of
+    identical ``incoming_call`` pushes, one for every Subscribe sent on the
+    push socket. Each copy used to fire its own ``ring`` event (one
+    notification per copy) and its own API refresh (429)."""
 
     @pytest.fixture(autouse=True)
     def _single_external_unit(self, coordinator: BticinoIntercomCoordinator) -> None:
@@ -1256,10 +1349,11 @@ class TestAnsweredCallRingTimeout:
         self, hass, coordinator, ws_rtc_offer, ws_rtc_terminate
     ) -> None:
         """Answering one call must not keep the next, unanswered one ringing."""
+        next_ring = {**ws_rtc_offer, "extra_params": {**ws_rtc_offer["extra_params"], "session_id": "next-ring"}}
         await coordinator._process_websocket_event(ws_rtc_offer)
         coordinator.mark_call_answered(EXTERNAL_UNIT_ID)
         await coordinator._process_websocket_event(ws_rtc_terminate)
-        await coordinator._process_websocket_event(ws_rtc_offer)
+        await coordinator._process_websocket_event(next_ring)
         await hass.async_block_till_done()
 
         events = async_capture_events(hass, EVENT_CALL)

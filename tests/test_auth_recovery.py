@@ -265,7 +265,7 @@ async def test_setup_continues_after_api_token_recovery(
     mock_auth_handler.authenticate.assert_awaited_once()
 
 
-@pytest.mark.parametrize("stage", ["connect", "resubscribe"])
+@pytest.mark.parametrize("stage", ["connect", "refresh"])
 async def test_websocket_auth_failure_requests_reauth_and_disconnects(
     hass: HomeAssistant,
     mock_config_entry,
@@ -278,14 +278,20 @@ async def test_websocket_auth_failure_requests_reauth_and_disconnects(
     """Manager exits through cleanup on auth failure, without reconnect storms."""
     from .conftest import _setup_integration
 
-    release = asyncio.Event()
     listener = None
-    if stage == "resubscribe":
-        listener = asyncio.create_task(release.wait())
+    if stage == "refresh":
+        listener = asyncio.create_task(asyncio.Event().wait())
         mock_websocket_client.get_listener_task.return_value = listener
-    getattr(mock_websocket_client, stage).side_effect = AuthError("Bad credentials")
+
+    async def connect():
+        # The hourly refresh opens a new connection: the second connect.
+        if stage == "connect" or mock_websocket_client.connect.await_count > 1:
+            raise AuthError("Bad credentials")
+
+    mock_websocket_client.connect.side_effect = connect
     with (
-        patch("custom_components.bticino_intercom.TOKEN_RESUBSCRIBE_INTERVAL", 0),
+        patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
+        patch("custom_components.bticino_intercom.PUSH_CONNECTION_REFRESH_INTERVAL", 0),
         patch("custom_components.bticino_intercom._wait_for_websocket_listener", AsyncMock(return_value=False)),
         patch("custom_components.bticino_intercom.auth.async_clear_tokens", new_callable=AsyncMock) as clear,
         patch.object(mock_config_entry, "async_start_reauth", MagicMock()) as reauth,
@@ -298,7 +304,7 @@ async def test_websocket_auth_failure_requests_reauth_and_disconnects(
     clear.assert_awaited_once()
     reauth.assert_called_once_with(hass)
     mock_websocket_client.disconnect.assert_awaited_once()
-    mock_websocket_client.connect.assert_awaited_once()
+    assert mock_websocket_client.connect.await_count == (1 if stage == "connect" else 2)
     if listener is not None:
         assert listener.cancelled()
 
@@ -371,36 +377,30 @@ async def test_setup_token_endpoint_outage_retries(
     clear.assert_not_awaited()
 
 
-@pytest.mark.parametrize("stage", ["connect", "resubscribe"])
 async def test_websocket_transient_auth_failure_reconnects(
-    hass, mock_config_entry, mock_auth_handler, mock_account, mock_websocket_client, mock_signaling_client, stage
+    hass, mock_config_entry, mock_auth_handler, mock_account, mock_websocket_client, mock_signaling_client
 ):
-    """An auth-service outage must clean up and reconnect without user input."""
+    """An auth-service outage must clean up and reconnect without user input.
+
+    The same outage during the hourly refresh keeps the current connection
+    instead (``TestPushConnectionRefresh`` in test_init.py).
+    """
     from .conftest import _setup_integration
 
     error = AuthError("Authentication failed")
     error.__cause__ = ApiError(503, "Unavailable")
     recovered = asyncio.Event()
-    listener = None
-    if stage == "resubscribe":
-        listener = asyncio.create_task(asyncio.Event().wait())
-        mock_websocket_client.get_listener_task.return_value = listener
 
     async def connect():
         if mock_websocket_client.connect.await_count == 1:
-            if stage == "connect":
-                raise error
-        else:
-            recovered.set()
-            await asyncio.Event().wait()
+            raise error
+        recovered.set()
+        await asyncio.Event().wait()
 
     mock_websocket_client.connect.side_effect = connect
-    mock_websocket_client.resubscribe.side_effect = error
     with (
         patch("custom_components.bticino_intercom.BOOT_RETRY_DELAYS", [0]),
         patch("custom_components.bticino_intercom.RUNTIME_RETRY_DELAYS", [0]),
-        patch("custom_components.bticino_intercom.TOKEN_RESUBSCRIBE_INTERVAL", 0),
-        patch("custom_components.bticino_intercom._wait_for_websocket_listener", AsyncMock(return_value=False)),
         patch("custom_components.bticino_intercom.auth.async_clear_tokens", new_callable=AsyncMock) as clear,
         patch.object(mock_config_entry, "async_start_reauth", MagicMock()) as reauth,
     ):
@@ -417,5 +417,3 @@ async def test_websocket_transient_auth_failure_reconnects(
     reauth.assert_not_called()
     assert mock_websocket_client.connect.await_count == 2
     assert mock_websocket_client.disconnect.await_count == 2
-    if listener is not None:
-        assert listener.cancelled()
