@@ -441,6 +441,14 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         display_name = self.data.get("modules", {}).get(display_id, {}).get("name", display_id)
 
         if rtc_action == "offer":
+            # Netatmo sends each offer as several pushes, each with its own
+            # tag_id, and repeats every push once per Subscribe on the socket.
+            # The first one is the call: the others must not overwrite it.
+            now = datetime.now(UTC)
+            dedup_id = calling_module_id or display_id
+            if self._is_repeated_offer(dedup_id, session_id, now):
+                return False
+
             _LOGGER.info("Incoming call (RTC offer) from %s (%s)", display_name, display_id)
 
             # Store active call state for WebRTC signaling
@@ -468,17 +476,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 )
                 _LOGGER.debug("Signaling session set from push offer: session_id=%s", session_id)
 
-            # Call session tracking for retransmission dedup
-            now = datetime.now(UTC)
-            dedup_id = calling_module_id or display_id
-            session = self._active_calls.get(dedup_id)
-
-            if session is not None:
-                if session.get("session_id") == session_id:
-                    session["last_seen"] = now
-                    _LOGGER.debug("Ignoring retransmitted offer for module %s (session active)", dedup_id)
-                    return False
-                # Different session from same module — close old, start new
+            # A new session from a module that is still ringing replaces it
+            if dedup_id in self._active_calls:
                 _LOGGER.info("New call from module %s replacing existing session", dedup_id)
                 self._end_call_session(dedup_id, reason="new_call")
 
@@ -588,6 +587,23 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             await self._close_history_event(closing_session_id, EVENT_TYPE_TERMINATED)
             return True
 
+        return False
+
+    def _is_repeated_offer(self, module_id: str, session_id: str | None, now: datetime) -> bool:
+        """Return True for another copy of an offer already handled.
+
+        A copy for the call that is ringing counts as a retransmission and
+        keeps its session alive for the watchdog. A copy for a call that has
+        just ended must not ring again.
+        """
+        session = self._active_calls.get(module_id)
+        if session is not None and session.get("session_id") == session_id:
+            session["last_seen"] = now
+            _LOGGER.debug("Ignoring retransmitted offer for module %s (session active)", module_id)
+            return True
+        if session_id and self._is_session_recently_closed(session_id):
+            _LOGGER.debug("Ignoring offer for session %s (call already over)", session_id)
+            return True
         return False
 
     def _resolve_calling_module(self) -> str | None:
@@ -730,13 +746,17 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         if event_type == "missed_call":
             _LOGGER.info("Missed call for %s", device_name)
-            self._mark_session_closed(
-                extra_params.get("session_id") or (self._active_call.get("session_id") if self._active_call else None)
+            session_id = extra_params.get("session_id") or (
+                self._active_call.get("session_id") if self._active_call else None
             )
+            # A terminate may have ended the call already and turned its
+            # entities off.
+            call_was_over = self._is_session_recently_closed(session_id)
+            self._mark_session_closed(session_id)
 
             # Turn off binary sensor — device_id here is the bridge MAC, not the
             # external unit module_id, so resolve the unit that rang.
-            calling_module = self._resolve_calling_module()
+            calling_module = None if call_was_over else self._resolve_calling_module()
             if calling_module:
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module)
             self._active_call = None
@@ -762,10 +782,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Call accepted for %s", device_name)
 
             # Don't clear active_call here — accepted means someone answered,
-            # the WebRTC session may still be active on another device
-            calling_module = self._resolve_calling_module()
-            if calling_module:
-                self.mark_call_answered(calling_module)
+            # the WebRTC session may still be active on another device. When
+            # the rescind came first, the call is already over and its
+            # entities are off.
+            if not self._is_session_recently_closed(extra_params.get("session_id")):
+                calling_module = self._resolve_calling_module()
+                if calling_module:
+                    self.mark_call_answered(calling_module)
 
             self.data[DATA_LAST_EVENT] = {
                 "type": EVENT_TYPE_ACCEPTED_CALL,
