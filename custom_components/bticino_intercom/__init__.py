@@ -57,7 +57,7 @@ RUNTIME_RETRY_DELAYS = [5, 15, 30, 60, 120]  # Backoff durante vita normale
 MAX_CONSECUTIVE_WS_FAILURES = 5  # Force config entry reload after this many consecutive failures
 WS_STABLE_CONNECTION_SECONDS = 300  # A shorter connection still counts as a failed retry
 RECONNECT_JITTER_RATIO = 0.2  # Avoid reconnecting every client at the same instant
-TOKEN_RESUBSCRIBE_INTERVAL = 3600  # Re-subscribe with fresh token every hour
+PUSH_CONNECTION_REFRESH_INTERVAL = 3600  # Move pushes to a new connection with a fresh token every hour
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
 SIGNALING_CLIENT_KEY = "signaling_client"
@@ -103,6 +103,50 @@ async def _wait_for_websocket_listener(listener_task: asyncio.Task[None], timeou
 
     await listener_task
     return True
+
+
+def _create_push_client(auth_handler: AuthHandler, coordinator: BticinoIntercomCoordinator) -> WebsocketClient:
+    """Return a push WebSocket client that hands every push to the coordinator."""
+    return WebsocketClient(auth_handler=auth_handler, message_callback=coordinator._handle_websocket_message)
+
+
+async def _refresh_push_connection(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    auth_handler: AuthHandler,
+    coordinator: BticinoIntercomCoordinator,
+    current: WebsocketClient,
+) -> WebsocketClient:
+    """Move the push subscription to a new connection with a fresh token.
+
+    Netatmo keeps every Subscribe sent on a connection: a second one on the
+    same socket makes every push arrive once more, until the socket closes.
+    So the fresh token goes on a new connection, and the current one closes
+    only once the new one is subscribed, so that no push falls in between.
+    The coordinator drops the copies the two connections deliver meanwhile.
+
+    Return the connection to keep: the new one, or ``current`` when the new
+    one could not be opened, since ``current`` still works.
+    """
+    fresh = _create_push_client(auth_handler, coordinator)
+    try:
+        await async_with_auth_retry(hass, entry, auth_handler, fresh.connect)
+    except asyncio.CancelledError:
+        # Left open, it would keep feeding pushes to an unloaded coordinator
+        await fresh.disconnect()
+        raise
+    except ConfigEntryAuthFailed:
+        raise
+    except Exception:
+        _LOGGER.warning("Could not open a new push connection; keeping the current one", exc_info=True)
+        return current
+
+    coordinator.websocket_client = fresh
+    if entry_data := hass.data.get(DOMAIN, {}).get(entry.entry_id):
+        entry_data[WEBSOCKET_CLIENT_KEY] = fresh
+    await current.disconnect()
+    _LOGGER.info("Push subscription moved to a new connection with a fresh token")
+    return fresh
 
 
 async def _deferred_start_websocket(hass, entry, start_fn):
@@ -167,12 +211,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )  # Pass None for websocket initially
 
     # Now create the websocket client, passing the coordinator's handler
-    # Ensure the callback method exists on the coordinator instance
-    websocket_client = WebsocketClient(
-        auth_handler=auth_handler,
-        message_callback=coordinator._handle_websocket_message,
-        # Pass app_version etc. if needed/customized
-    )
+    websocket_client = _create_push_client(auth_handler, coordinator)
     coordinator.websocket_client = websocket_client
 
     # Prepare event history store (images + metadata on disk).
@@ -334,6 +373,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Manage the WebSocket connection and reconnection."""
         # This function now runs *after* HA has started
         _LOGGER.info("Starting WebSocket connection manager task function (triggered by HA start)")
+        push_client = websocket_client  # Replaced by every hourly refresh
         is_boot = True  # First connection attempt after startup
         attempt = 0  # Retry counter, resets on successful connection
         # Outer try block to catch unexpected errors in the loop structure itself
@@ -351,39 +391,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Attempt to connect (includes subscription and starting listener)
                     _LOGGER.info("Attempting WebSocket connect... (calling websocket_client.connect)")
                     message_time_at_connect = coordinator.last_ws_message_time
-                    await async_with_auth_retry(hass, entry, auth_handler, websocket_client.connect)
+                    await async_with_auth_retry(hass, entry, auth_handler, push_client.connect)
                     _LOGGER.info("WebSocket connect call completed without raising immediate exception.")
                     connection_started_at = asyncio.get_running_loop().time()
                     is_boot = False
 
                     # Get the listener task from the client
-                    listener_task = websocket_client.get_listener_task()
+                    listener_task = push_client.get_listener_task()
                     if listener_task:
-                        # Monitor loop: check stale WS + proactive re-subscribe
+                        # Monitor loop: wait on the listener, and move to a
+                        # new connection with a fresh token every hour
                         _LOGGER.debug("Waiting for WebSocket listener task to complete...")
-                        last_resubscribe = asyncio.get_running_loop().time()
-                        while True:
-                            listener_finished = await _wait_for_websocket_listener(listener_task, timeout=60)
-                            if listener_finished:
+                        last_refresh = asyncio.get_running_loop().time()
+                        while listener_task:
+                            if await _wait_for_websocket_listener(listener_task, timeout=60):
                                 _LOGGER.info("WebSocket listener task finished cleanly.")
                                 break
-
-                            # Proactive re-subscribe to keep session alive
-                            elapsed = asyncio.get_running_loop().time() - last_resubscribe
-                            if elapsed >= TOKEN_RESUBSCRIBE_INTERVAL:
-                                try:
-                                    _LOGGER.info("Re-subscribing with fresh token (%.0fs elapsed)...", elapsed)
-                                    await async_with_auth_retry(hass, entry, auth_handler, websocket_client.resubscribe)
-                                    last_resubscribe = asyncio.get_running_loop().time()
-                                    _LOGGER.info("Re-subscribe successful, connection kept alive.")
-                                except ConfigEntryAuthFailed:
-                                    raise
-                                except Exception:
-                                    _LOGGER.warning("Re-subscribe failed, forcing reconnect.", exc_info=True)
-                                    listener_task.cancel()
-                                    with suppress(asyncio.CancelledError):
-                                        await listener_task
-                                    break
+                            if asyncio.get_running_loop().time() - last_refresh >= PUSH_CONNECTION_REFRESH_INTERVAL:
+                                push_client = await _refresh_push_connection(
+                                    hass, entry, auth_handler, coordinator, push_client
+                                )
+                                listener_task = push_client.get_listener_task()
+                                last_refresh = asyncio.get_running_loop().time()
                     else:
                         _LOGGER.warning("Could not get listener task after connect. Treating as disconnection.")
 
@@ -418,7 +447,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         # Wait briefly for cancellation to propagate if needed
                         with suppress(asyncio.CancelledError):
                             await listener_task
-                    await websocket_client.disconnect()  # disconnect handles its own listener task cancellation too
+                    await push_client.disconnect()  # disconnect handles its own listener task cancellation too
                     _LOGGER.debug("WebSocket client disconnected in finally block.")
 
                 # --- Smart Reconnect Delay Logic ---

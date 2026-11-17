@@ -31,7 +31,7 @@ All code is in `custom_components/bticino_intercom/`.
 What the config and the code don't tell you:
 
 - The module subtype comes from `variant`, or from `type` when `variant` is missing (EasyKit, EOS `BNCX`). The 344742 staircase light reports `BNVL`. Use `utils.get_module_subtype`.
-- Netatmo sends one copy of each push per device registered on the account, so pushes are deduplicated (#106). The push socket belongs to the account, so pushes are filtered by home (#95).
+- Pushes arrive in copies, so they are deduplicated (#106). Every Subscribe sent on the push socket adds a subscription that lasts until the socket closes, and each one delivers every push again, so the hourly token refresh opens a new connection instead of subscribing again. An RTC push also comes as several pushes, each with its own `tag_id`. The push socket belongs to the account, so pushes are filtered by home (#95).
 - Snapshot and vignette URLs expire within minutes, so the history downloads the images as soon as `incoming_call` arrives.
 - The bridge has very few peer slots. Every WebRTC session ends with `send_terminate(session_id)` naming its own session; without an id, pybticino terminates the most recent session, which may belong to another camera.
 - BNC1 firmware reboots when an offer's SDP grows past about 8 KB, so the offer is trimmed to H264. The filter removes payload types and keeps their numbers, so the device's answer stays valid.
