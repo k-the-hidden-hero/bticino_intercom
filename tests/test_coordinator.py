@@ -1486,3 +1486,50 @@ class TestStatusPushWithoutRtcOffer:
 
         assert signals == []
         assert [event["module_id"] for event in events] == [DOORLOCK_ID]
+
+
+class TestSecondaryUnlistedEntrance:
+    """Secondary SCS bus units absent from homesdata route to the sole configured unit."""
+
+    async def test_unlisted_offer_routes_to_sole_external_unit_and_exposes_gateway(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+    ) -> None:
+        """An offer from an unlisted bus module triggers the sole unit and flags session unlock."""
+        del coordinator.data["modules"][EXTERNAL_UNIT_2_ID]
+        unlisted_id = "d9a63b-a16f-66fa590033e2"
+        offer = {
+            **ws_rtc_offer,
+            "source": "fcm",
+            "extra_params": {
+                **ws_rtc_offer["extra_params"],
+                "data": {
+                    **ws_rtc_offer["extra_params"]["data"],
+                    "session_description": {
+                        **ws_rtc_offer["extra_params"]["data"]["session_description"],
+                        "module_id": unlisted_id,
+                    },
+                },
+            },
+        }
+
+        events = async_capture_events(coordinator.hass, EVENT_CALL)
+        signals: list[tuple] = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            assert await coordinator._process_websocket_event(offer) is True
+        await coordinator.hass.async_block_till_done()
+
+        assert coordinator.active_call is not None
+        assert coordinator.active_call["module_id"] == EXTERNAL_UNIT_ID
+        assert coordinator.active_call["source_module_id"] == unlisted_id
+        assert coordinator.get_secondary_call_gateway() == (BRIDGE_MAC, unlisted_id)
+        assert (True, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
+        assert events[0].data["source_module_id"] == unlisted_id
+
+        coordinator.clear_active_call(SESSION_ID)
+        assert coordinator.active_call is None
+        assert coordinator.get_secondary_call_gateway() is None

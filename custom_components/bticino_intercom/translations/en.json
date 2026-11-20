@@ -41,7 +41,8 @@
         "title": "BTicino Light Options",
         "description": "Configure how your BTicino lights behave",
         "data": {
-          "light_as_lock": "Use light relay as door lock (Spanish installation method)"
+          "light_as_lock": "Use light relay as door lock (Spanish installation method)",
+          "fcm_api_key": "Firebase Android API key for FCM call offers (optional)"
         }
       }
     },
