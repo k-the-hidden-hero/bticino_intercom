@@ -895,6 +895,24 @@ class TestOfferCopies:
         assert [event.data["type"] for event in events] == ["ring", "end"]
         assert coordinator.active_call is None
 
+    async def test_a_copy_after_the_answer_does_not_ring_again(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+    ) -> None:
+        """A copy of the offer that lands after the answer is the same call, not a new ring."""
+        events = async_capture_events(hass, EVENT_CALL)
+
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        coordinator.mark_call_answered(EXTERNAL_UNIT_ID)
+        late_copy = self._copies(ws_rtc_offer, 2)[1]
+        assert await coordinator._process_websocket_event(late_copy) is False
+        await hass.async_block_till_done()
+
+        assert [event.data["type"] for event in events] == ["ring"]
+        assert EXTERNAL_UNIT_ID in coordinator._answered_modules
+
 
 class TestStatusPushAfterTheCallEnded:
     """On 2026-11-16 a ring answered on the monitor sent the rescind first and

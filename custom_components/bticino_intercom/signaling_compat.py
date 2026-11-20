@@ -1,13 +1,14 @@
-"""SignalingClient subclass backporting pybticino PR #32 and PR #33.
+"""SignalingClient subclass backporting pybticino PR #32, PR #33, and resubscribe ack wait.
 
-Allows testing answer-ack matching, stale-token reconnect retry, and
-player/unmute on top of standard pybticino 1.10.1 without requiring a custom
-library wheel inside Home Assistant.
+Allows testing answer-ack matching, non-destructive stale-token resubscribe
+retry, and player/unmute on top of standard pybticino 1.10.1 without requiring
+a custom library wheel inside Home Assistant.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -17,14 +18,17 @@ from pybticino.exceptions import PyBticinoException
 _LOGGER = logging.getLogger(__name__)
 
 ANSWER_ACK_TIMEOUT = 10.0
+RESUBSCRIBE_ACK_TIMEOUT = 10.0
 
 
 class BticinoSignalingClient(SignalingClient):
-    """SignalingClient with answer-ack waiting, stale-token retry, and send_player."""
+    """SignalingClient with subscribe/answer ack waiting, in-place retry, and send_player."""
 
     def __init__(self, auth_handler: AuthHandler) -> None:
         super().__init__(auth_handler=auth_handler)
         self._pending_answer_acks: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._compat_resubscribe_lock = asyncio.Lock()
+        self._compat_pending_subscribe_ack: asyncio.Future[dict[str, Any]] | None = None
 
     def _fail_pending_answers(self, reason: str) -> None:
         for fut in self._pending_answer_acks.values():
@@ -32,18 +36,36 @@ class BticinoSignalingClient(SignalingClient):
                 fut.set_exception(PyBticinoException(reason))
         self._pending_answer_acks.clear()
 
+    def _fail_pending_subscribe(self, reason: str) -> None:
+        fut = self._compat_pending_subscribe_ack
+        self._compat_pending_subscribe_ack = None
+        if fut is not None and not fut.done():
+            fut.set_exception(PyBticinoException(reason))
+
     async def disconnect(self) -> None:
         await super().disconnect()
         self._fail_pending_answers("Signaling disconnected before the answer was acked")
+        self._fail_pending_subscribe("Signaling disconnected before resubscribe ack")
 
     async def _listen(self) -> None:
         try:
             await super()._listen()
         finally:
             self._fail_pending_answers("Signaling socket closed before the answer was acked")
+            self._fail_pending_subscribe("Signaling socket closed before resubscribe ack")
 
     async def _handle_ack(self, message: dict[str, Any]) -> None:
         corr = message.get("correlation_id")
+        session_id = message.get("session_id")
+        if (
+            self._compat_pending_subscribe_ack is not None
+            and not self._compat_pending_subscribe_ack.done()
+            and session_id is None
+            and corr in (0, "0")
+        ):
+            self._compat_pending_subscribe_ack.set_result(message)
+            return
+
         if corr is not None:
             corr_str = str(corr)
             if corr_str in self._pending_answer_acks:
@@ -52,6 +74,36 @@ class BticinoSignalingClient(SignalingClient):
                     fut.set_result(message)
                 return
         await super()._handle_ack(message)
+
+    async def resubscribe(self, timeout: float = RESUBSCRIBE_ACK_TIMEOUT) -> None:
+        """Re-subscribe with a fresh token and wait for the subscribe ack (correlation_id 0)."""
+        async with self._compat_resubscribe_lock:
+            if not self._websocket or not self._is_connected:
+                raise PyBticinoException("Cannot resubscribe: no active signaling connection")
+
+            access_token = await self._auth_handler.get_access_token()
+            subscribe_msg = {
+                "action": "subscribe",
+                "access_token": access_token,
+                "app_type": "app_security",
+                "version": "1.0",
+                "platform": "android",
+            }
+            loop = asyncio.get_running_loop()
+            ack_future: asyncio.Future[dict[str, Any]] = loop.create_future()
+            self._compat_pending_subscribe_ack = ack_future
+            _LOGGER.info("Re-subscribing signaling with fresh token")
+            try:
+                await self._websocket.send(json.dumps(subscribe_msg))
+                ack = await asyncio.wait_for(ack_future, timeout=timeout)
+            except TimeoutError as err:
+                raise PyBticinoException("Timeout waiting for signaling resubscribe ack") from err
+            finally:
+                if self._compat_pending_subscribe_ack is ack_future:
+                    self._compat_pending_subscribe_ack = None
+
+            if ack.get("status") != "ok":
+                raise PyBticinoException(f"Signaling resubscription failed: {ack}")
 
     async def send_terminate(self, session_id: str | None = None) -> None:
         resolved = self._resolve_session(session_id)
@@ -69,9 +121,6 @@ class BticinoSignalingClient(SignalingClient):
         await self.ensure_connected()
         if ws_before is not None and self._websocket is ws_before:
             await self.resubscribe()
-            # Give the server a brief moment to process the subscribe before an
-            # offer/answer goes out (mitigates Invalid access_token race).
-            await asyncio.sleep(0.1)
 
     async def send_answer_with_ack(
         self,
@@ -82,8 +131,9 @@ class BticinoSignalingClient(SignalingClient):
     ) -> dict[str, Any] | None:
         """Send an SDP answer and await the ack matching the offer's correlation_id.
 
-        If the cloud refuses with code 2 (Invalid access_token), disconnects,
-        reconnects with a fresh token, restores the push session, and retries once.
+        If the cloud refuses with code 2 (Invalid access_token), resubscribes on
+        the existing socket (waiting for the subscribe ack so other sessions on
+        the socket stay intact) and retries once.
         """
         ack = await self._send_answer_once(sdp, session_id=session_id, timeout=timeout)
         if not ack:
@@ -94,22 +144,12 @@ class BticinoSignalingClient(SignalingClient):
             resolved = self._resolve_session(session_id)
             if resolved is None:
                 return ack
-            sid, session = resolved
-            tag_id = session.tag_id
-            corr_id = session.correlation_id
-            device_id = session.device_id
+            sid, _session = resolved
             _LOGGER.warning(
-                "Answer for session %s rejected with Invalid access_token (code 2); reconnecting and retrying",
+                "Answer for session %s rejected with Invalid access_token (code 2); resubscribing and retrying",
                 sid,
             )
-            await self.disconnect()
-            await self.connect()
-            self.set_session_from_push(
-                session_id=sid,
-                tag_id=tag_id,
-                correlation_id="" if corr_id is None else str(corr_id),
-                device_id=device_id,
-            )
+            await self.resubscribe(timeout=timeout)
             ack = await self._send_answer_once(sdp, session_id=sid, timeout=timeout)
         return ack
 

@@ -173,8 +173,11 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         active_sid = self._active_call.get("session_id")
         if session_id and active_sid and active_sid != session_id:
             return
+        active_mid = self._active_call.get("module_id")
         if active_sid:
             self._mark_session_closed(active_sid)
+        if active_mid:
+            self._end_call_session(active_mid, reason="closed")
         self._active_call = None
 
     def get_secondary_call_gateway(self) -> tuple[str, str] | None:
@@ -1060,7 +1063,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
     def mark_call_answered(self, module_id: str) -> None:
         """Record that the unit's current ring was picked up, and stop the ringing."""
         self._answered_modules.add(module_id)
-        self._end_call_session(module_id, reason="answered")
+        # Keep the active_calls entry so late copies of the same offer still hit
+        # _is_repeated_offer dedup, but cancel its inactivity watchdog so an
+        # answered call is not closed while media is in progress.
+        session = self._active_calls.get(module_id)
+        if session is not None:
+            watchdog: asyncio.Task | None = session.get("watchdog")
+            if watchdog is not None and not watchdog.done():
+                watchdog.cancel()
+            session["watchdog"] = None
         async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
 
     def fire_call_timeout(self, module_id: str) -> None:
