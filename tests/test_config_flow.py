@@ -330,3 +330,20 @@ async def test_options_flow(
     )
     assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert result2["data"]["light_as_lock"] is True
+
+
+async def test_options_flow_saves_fcm_api_key(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """Test that the options flow strips and stores the optional FCM API key."""
+    result = await hass.config_entries.options.async_init(mock_setup_entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"light_as_lock": False, "fcm_api_key": "  example-firebase-key  "},
+    )
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
+    assert result2["data"]["fcm_api_key"] == "example-firebase-key"

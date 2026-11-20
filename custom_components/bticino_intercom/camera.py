@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections import deque
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
 from typing import Any
@@ -33,6 +34,7 @@ except ImportError:  # older releases have no native two-way audio
 
 from .const import DOMAIN, IMAGE_CACHE_SECONDS, SUBTYPE_EXTERNAL_UNIT
 from .coordinator import BticinoIntercomCoordinator
+from .signaling_compat import BticinoSignalingClient
 from .utils import cleanup_orphaned_entities, format_timestamp_iso, get_module_subtype
 
 _LOGGER = logging.getLogger(__name__)
@@ -358,6 +360,9 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         self._pending_terminate: asyncio.Task | None = None
         # Incoming call already answered: the device's offer cannot be reused.
         self._answered_call_session: str | None = None
+        # Sessions answered as incoming calls (used to send player/unmute once).
+        self._answered_call_sessions: set[str] = set()
+        self._unmuted_sessions: set[str] = set()
         # Watchdog that frees the device peer slot when no answer ever arrives
         self._answer_watchdog: asyncio.Task | None = None
         self._poster_event_id: str | None = None
@@ -881,8 +886,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             await self._await_pending_terminate()
 
             # Ensure signaling is connected with a fresh token
-            await self._signaling.ensure_connected()
-            await self._signaling.resubscribe()
+            if isinstance(self._signaling, BticinoSignalingClient):
+                await self._signaling.ensure_ready()
+            else:
+                await self._signaling.ensure_connected()
+                await self._signaling.resubscribe()
 
             if self._ha_session_id != session_id:
                 # A newer offer (or a close) arrived while we were waiting; it
@@ -977,9 +985,26 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
                     call_session,
                     device_id,
                 )
+                corr_id = answer_call.get("correlation_id")
+                self._signaling.set_session_from_push(
+                    session_id=call_session,
+                    tag_id=answer_call.get("tag_id", ""),
+                    correlation_id="" if corr_id is None else str(corr_id),
+                    device_id=answer_call.get("device_id") or device_id,
+                )
                 answer_sdp = self.convert_offer_to_answer_sdp(offer_sdp)
-                await self._signaling.send_answer(answer_sdp, session_id=call_session)
+                if isinstance(self._signaling, BticinoSignalingClient):
+                    ack = await self._signaling.send_answer_with_ack(answer_sdp, session_id=call_session)
+                    if isinstance(ack, dict) and ack.get("error"):
+                        err_info = ack["error"]
+                        msg = err_info.get("message", str(err_info)) if isinstance(err_info, dict) else str(err_info)
+                        send_message(WebRTCError(code="answer_refused", message=msg))
+                        return
+                else:
+                    await self._signaling.send_answer(answer_sdp, session_id=call_session)
                 self._answered_call_session = call_session
+                if call_session:
+                    self._answered_call_sessions.add(call_session)
                 self.coordinator.mark_call_answered(self._module_id)
 
                 # Send the device's original offer to the browser as the "answer".
@@ -1134,8 +1159,11 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         )
 
     async def async_added_to_hass(self) -> None:
-        """Fetch TURN servers when entity is added."""
+        """Fetch TURN servers when entity is added and register camera for WS API."""
         await super().async_added_to_hass()
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry.entry_id)
+        if isinstance(entry_data, dict):
+            entry_data.setdefault("cameras", {})[self.entity_id] = self
 
         try:
             ice_servers_raw = await self._account.async_get_turn_servers()
@@ -1150,6 +1178,159 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
             _LOGGER.info("Loaded %d TURN/STUN servers", len(self._turn_servers))
         except Exception:
             _LOGGER.warning("Failed to fetch TURN servers, WebRTC may not work behind NAT")
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister camera from WS API lookup table."""
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry.entry_id)
+        if isinstance(entry_data, dict):
+            cameras = entry_data.get("cameras")
+            if isinstance(cameras, dict):
+                cameras.pop(self.entity_id, None)
+        await super().async_will_remove_from_hass()
+
+    def get_incoming_offer(self) -> dict[str, Any] | None:
+        """Return the active incoming call offer for this camera, if unspent."""
+        active_call = self.coordinator.active_call
+        if (
+            active_call
+            and active_call.get("sdp")
+            and active_call.get("module_id") == self._module_id
+            and active_call.get("session_id")
+            and active_call.get("session_id") != self._answered_call_session
+        ):
+            return {
+                "session_id": active_call["session_id"],
+                "sdp": active_call["sdp"],
+                "module_id": self._module_id,
+            }
+        return None
+
+    async def async_answer_incoming_call(
+        self,
+        call_session: str,
+        answer_sdp: str,
+        send_event: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """Answer an incoming device offer natively (browser ran createAnswer)."""
+        active_call = self.coordinator.active_call
+        if not active_call or active_call.get("session_id") != call_session:
+            send_event({"type": "error", "code": "no_active_call", "message": "Incoming call is no longer active"})
+            return
+
+        device_id = active_call.get("device_id") or self.coordinator.main_device_id
+        if not device_id:
+            send_event({"type": "error", "code": "no_device", "message": "No bridge device found"})
+            return
+
+        self._ha_session_id = call_session
+        self._signaling_session_id = call_session
+        self._session_ready = False
+        self._pending_candidates.clear()
+
+        try:
+            await self._await_pending_terminate()
+            if isinstance(self._signaling, BticinoSignalingClient):
+                await self._signaling.ensure_ready()
+            else:
+                await self._signaling.ensure_connected()
+
+            if self._ha_session_id != call_session:
+                return
+
+            corr_id = active_call.get("correlation_id")
+            self._signaling.set_session_from_push(
+                session_id=call_session,
+                tag_id=active_call.get("tag_id", ""),
+                correlation_id="" if corr_id is None else str(corr_id),
+                device_id=device_id,
+            )
+
+            async def on_candidate(sig_session_id: str, ice: dict) -> None:
+                if self._is_foreign_session(sig_session_id):
+                    return
+                candidate_str = ice.get("candidate", "")
+                sdp_m_line_index = ice.get("sdp_m_line_index", ice.get("sdpMLineIndex", 0))
+                _LOGGER.debug("Received remote ICE candidate (native answer, m=%d)", sdp_m_line_index)
+                send_event(
+                    {
+                        "type": "candidate",
+                        "candidate": {
+                            "candidate": candidate_str,
+                            "sdp_m_line_index": sdp_m_line_index,
+                        },
+                    }
+                )
+
+            async def on_event(sig_session_id: str, event_type: str, data: dict) -> None:
+                if self._is_foreign_session(sig_session_id):
+                    return
+                error = data.get("data", {}).get("error", {})
+                error_msg = error.get("message", event_type) if error else event_type
+                _LOGGER.warning("Signaling event %s (native answer): %s", event_type, error_msg)
+                if event_type in ("terminate", "rescind"):
+                    self.coordinator.clear_active_call(sig_session_id)
+                send_event({"type": "error", "code": event_type, "message": error_msg})
+
+            self._signaling._on_candidate = on_candidate
+            self._signaling._on_event = on_event
+
+            _LOGGER.info(
+                "Sending native WebRTC answer for incoming call (session=%s, device=%s, sdp=%d bytes)",
+                call_session,
+                device_id,
+                len(answer_sdp),
+            )
+            if isinstance(self._signaling, BticinoSignalingClient):
+                ack = await self._signaling.send_answer_with_ack(answer_sdp, session_id=call_session)
+                if isinstance(ack, dict) and ack.get("error"):
+                    err_info = ack["error"]
+                    msg = err_info.get("message", str(err_info)) if isinstance(err_info, dict) else str(err_info)
+                    send_event({"type": "error", "code": "answer_refused", "message": msg})
+                    return
+            else:
+                await self._signaling.send_answer(answer_sdp, session_id=call_session)
+
+            if self._ha_session_id != call_session:
+                await self._terminate(call_session)
+                return
+
+            self._answered_call_session = call_session
+            self._answered_call_sessions.add(call_session)
+            self.coordinator.mark_call_answered(self._module_id)
+            self._session_ready = True
+            send_event({"type": "session", "session_id": call_session})
+            await self._flush_pending_candidates()
+        except Exception as err:
+            _LOGGER.exception("Failed to send native WebRTC answer")
+            send_event({"type": "error", "code": "answer_failed", "message": str(err)})
+
+    async def async_handle_webrtc_connected(self, session_id: str) -> bool:
+        """Send player/unmute once when media connects for an answered incoming call.
+
+        On GStreamer webrtcbin bridges (BDIY, BNCX, and BNC1 hw 200), answering
+        the SDP offer starts media preview, while a single player/unmute takes
+        the call off hold (stops ringing and transitions to accepted_call).
+        The command is a toggle, so it must be sent at most once per call and
+        never before the device has published its incoming_call status push.
+        """
+        target_session = session_id if session_id in self._answered_call_sessions else self._signaling_session_id
+        if not target_session or target_session not in self._answered_call_sessions:
+            return False
+        if target_session in self._unmuted_sessions:
+            return False
+
+        self._unmuted_sessions.add(target_session)
+        await self.coordinator.async_wait_for_incoming_call(target_session, timeout=3.0)
+        if not hasattr(self._signaling, "send_player"):
+            return False
+        try:
+            await self._signaling.send_player("unmute", session_id=target_session)
+            _LOGGER.info("Sent player/unmute for answered call %s (module=%s)", target_session, self._module_id)
+            return True
+        except Exception as err:
+            self._unmuted_sessions.discard(target_session)
+            _LOGGER.warning("Failed to send player/unmute for session %s: %s", target_session, err)
+            return False
 
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
@@ -1175,6 +1356,7 @@ class BticinoWebRTCCamera(CoordinatorEntity[BticinoIntercomCoordinator], Camera)
         self._pending_candidates.clear()
         self._signaling_session_id = None
         if signaling_session_id:
+            self.coordinator.clear_active_call(signaling_session_id)
             self._pending_terminate = self.hass.async_create_task(self._terminate(signaling_session_id))
 
 

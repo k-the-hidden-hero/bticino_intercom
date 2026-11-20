@@ -108,8 +108,41 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         # ring timer leaves these calls alone: they end with the device's
         # terminate or with whoever hangs up (#72).
         self._answered_modules: set[str] = set()
+        # Track incoming_call status pushes by session_id so player/unmute
+        # never goes out before the device has published the ring (#72).
+        self._incoming_call_events: dict[str, asyncio.Event] = {}
         # Populated by __init__.py after entry setup.
         self.history: EventHistoryStore | None = None
+
+    def mark_incoming_call_seen(self, session_id: str | None) -> None:
+        """Record that the device published incoming_call for session_id."""
+        if not session_id:
+            return
+        event = self._incoming_call_events.get(session_id)
+        if event is None:
+            event = asyncio.Event()
+            self._incoming_call_events[session_id] = event
+            if len(self._incoming_call_events) > 32:
+                oldest = next(iter(self._incoming_call_events))
+                self._incoming_call_events.pop(oldest, None)
+        event.set()
+
+    async def async_wait_for_incoming_call(self, session_id: str | None, timeout: float = 3.0) -> bool:
+        """Wait until incoming_call has been seen for session_id (or timeout)."""
+        if not session_id:
+            return True
+        event = self._incoming_call_events.get(session_id)
+        if event is None:
+            event = asyncio.Event()
+            self._incoming_call_events[session_id] = event
+        if event.is_set():
+            return True
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+            return True
+        except TimeoutError:
+            _LOGGER.debug("Timed out waiting %.1fs for incoming_call status push (session=%s)", timeout, session_id)
+            return False
 
     @property
     def main_device_id(self) -> str | None:
@@ -132,6 +165,52 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
     def active_call(self) -> dict[str, Any] | None:
         """Return the active call state, or None if no call is in progress."""
         return self._active_call
+
+    def clear_active_call(self, session_id: str | None = None) -> None:
+        """Clear active_call state when a local WebRTC call ends or times out."""
+        if not self._active_call:
+            return
+        active_sid = self._active_call.get("session_id")
+        if session_id and active_sid and active_sid != session_id:
+            return
+        active_mid = self._active_call.get("module_id")
+        if active_sid:
+            self._mark_session_closed(active_sid)
+        if active_mid:
+            self._end_call_session(active_mid, reason="closed")
+        self._active_call = None
+
+    def get_secondary_call_gateway(self) -> tuple[str, str] | None:
+        """Return (gateway_id, source_module_id) if an unlisted secondary entrance is active.
+
+        Secondary/audio-only SCS bus units (e.g. an inner condo door) are not
+        listed in Netatmo's homesdata, so cloud setstate rejects their BNDL
+        lock IDs with code 21. During an active ring/call from such a unit, the
+        official Home + Security app (OpenSessionDoorLockAction) sends setstate
+        ``{"lock": false}`` directly to the BNC1 gateway MAC instead, which
+        unlocks whichever entrance is currently active on the SCS bus.
+        """
+        active = self._active_call
+        if not active:
+            return None
+        source_mid = active.get("source_module_id")
+        entity_mid = active.get("module_id")
+        if not source_mid or not entity_mid or source_mid == entity_mid:
+            return None
+        created_at = active.get("created_at")
+        if isinstance(created_at, datetime):
+            age = (datetime.now(UTC) - created_at).total_seconds()
+            if age > CALL_SESSION_MAX_DURATION:
+                _LOGGER.debug(
+                    "Ignoring stale secondary active_call (session=%s, age=%.1fs)",
+                    active.get("session_id"),
+                    age,
+                )
+                return None
+        gateway_id = active.get("device_id") or self._main_device_id
+        if not gateway_id:
+            return None
+        return gateway_id, source_mid
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Recover API-rejected tokens once, preserving upstream polling behavior."""
@@ -365,6 +444,8 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             "module_name": module_name,
             "session_id": session_id,
         }
+        if self._active_call and (source_mid := self._active_call.get("source_module_id")):
+            data["source_module_id"] = source_mid
         if event_type == "ring":
             data["snapshot_url"] = snapshot_url
             data["vignette_url"] = vignette_url
@@ -426,9 +507,13 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
         device_id = extra_params.get("device_id")
         session_id = extra_params.get("session_id")
 
-        # For offer: module_id comes from session_description
-        # For terminate/rescind: recover from active_call state
-        calling_module_id = session_desc.get("module_id")
+        # For offer: module_id comes from session_description.
+        # Secondary/audio-only bus entrances (e.g. a condo inner door) may not
+        # be listed in Netatmo homesdata, so route unlisted modules to the home's
+        # sole configured external unit while preserving source_module_id.
+        # For terminate/rescind: recover from active_call state.
+        raw_module_id = session_desc.get("module_id")
+        calling_module_id = self._resolve_entity_module_id(raw_module_id)
         if not calling_module_id and self._active_call:
             calling_module_id = self._active_call.get("module_id")
 
@@ -449,7 +534,12 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             if self._is_repeated_offer(dedup_id, session_id, now):
                 return False
 
-            _LOGGER.info("Incoming call (RTC offer) from %s (%s)", display_name, display_id)
+            _LOGGER.info(
+                "Incoming call (RTC offer) from %s (%s, source=%s)",
+                display_name,
+                display_id,
+                raw_module_id or display_id,
+            )
 
             # Store active call state for WebRTC signaling
             self._active_call = {
@@ -458,8 +548,10 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 "correlation_id": extra_params.get("correlation_id"),
                 "device_id": device_id,
                 "module_id": calling_module_id,
+                "source_module_id": raw_module_id or calling_module_id,
                 "sdp": session_desc.get("sdp"),
                 "modules": session_desc.get("modules", []),
+                "created_at": now,
             }
             _LOGGER.debug("Active call state stored: session_id=%s, module=%s", session_id, calling_module_id)
 
@@ -491,6 +583,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 "last_seen": now,
                 "watchdog": watchdog,
                 "session_id": session_id,
+                "from_fcm": message.get("source") == "fcm",
             }
 
             # Record the call in history (without images for now).
@@ -606,6 +699,34 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             return True
         return False
 
+    def _resolve_entity_module_id(self, raw_module_id: str | None) -> str | None:
+        """Map an RTC offer's module_id to a configured HA external unit.
+
+        If raw_module_id exists in homesdata, return it unchanged. Otherwise
+        (e.g. a secondary audio-only condo door that Netatmo omits from
+        homesdata), route to the home's sole configured external unit so HA
+        can still notify and answer the call.
+        """
+        if not raw_module_id:
+            return None
+        modules = self.data.get("modules", {})
+        if raw_module_id in modules:
+            return raw_module_id
+
+        external_units = [
+            module_id
+            for module_id, module_data in modules.items()
+            if get_module_subtype(module_data) == SUBTYPE_EXTERNAL_UNIT
+        ]
+        if len(external_units) == 1:
+            _LOGGER.info(
+                "RTC offer from unlisted module %s; routing to external unit %s",
+                raw_module_id,
+                external_units[0],
+            )
+            return external_units[0]
+        return raw_module_id
+
     def _resolve_calling_module(self) -> str | None:
         """Return the external unit a status push refers to, if it can be known.
 
@@ -676,6 +797,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
 
         if event_type == "incoming_call":
             _LOGGER.info("Incoming call status event (with snapshot) for %s", device_name)
+            self.mark_incoming_call_seen(extra_params.get("session_id"))
 
             snapshot_url = extra_params.get("snapshot_url")
             vignette_url = extra_params.get("vignette_url")
@@ -758,6 +880,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
             # external unit module_id, so resolve the unit that rang.
             calling_module = None if call_was_over else self._resolve_calling_module()
             if calling_module:
+                self._end_call_session(calling_module, reason="missed_call")
                 async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, calling_module)
             self._active_call = None
 
@@ -940,6 +1063,15 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
     def mark_call_answered(self, module_id: str) -> None:
         """Record that the unit's current ring was picked up, and stop the ringing."""
         self._answered_modules.add(module_id)
+        # Keep the active_calls entry so late copies of the same offer still hit
+        # _is_repeated_offer dedup, but cancel its inactivity watchdog so an
+        # answered call is not closed while media is in progress.
+        session = self._active_calls.get(module_id)
+        if session is not None:
+            watchdog: asyncio.Task | None = session.get("watchdog")
+            if watchdog is not None and not watchdog.done():
+                watchdog.cancel()
+            session["watchdog"] = None
         async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
 
     def fire_call_timeout(self, module_id: str) -> None:
@@ -965,13 +1097,16 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                 idle = (now - session["last_seen"]).total_seconds()
                 total = (now - session["started"]).total_seconds()
 
-                if idle >= CALL_RETRANSMIT_WINDOW:
+                # FCM delivers the RTC offer once (no retransmissions), whereas
+                # the doorbell rings for ~26-30s before missed_call arrives.
+                if not session.get("from_fcm") and idle >= CALL_RETRANSMIT_WINDOW:
                     _LOGGER.info(
                         "Call session for module %s closed by inactivity (%.1fs)",
                         module_id,
                         idle,
                     )
                     async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
+                    self.clear_active_call(session.get("session_id"))
                     self._end_call_session(module_id, reason="inactivity")
                     return
                 if total >= CALL_SESSION_MAX_DURATION:
@@ -981,6 +1116,7 @@ class BticinoIntercomCoordinator(DataUpdateCoordinator):
                         total,
                     )
                     async_dispatcher_send(self.hass, SIGNAL_CALL_RECEIVED, False, module_id)
+                    self.clear_active_call(session.get("session_id"))
                     self._end_call_session(module_id, reason="hard_timeout")
                     return
         except asyncio.CancelledError:

@@ -895,6 +895,24 @@ class TestOfferCopies:
         assert [event.data["type"] for event in events] == ["ring", "end"]
         assert coordinator.active_call is None
 
+    async def test_a_copy_after_the_answer_does_not_ring_again(
+        self,
+        hass: HomeAssistant,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+    ) -> None:
+        """A copy of the offer that lands after the answer is the same call, not a new ring."""
+        events = async_capture_events(hass, EVENT_CALL)
+
+        await coordinator._process_websocket_event(ws_rtc_offer)
+        coordinator.mark_call_answered(EXTERNAL_UNIT_ID)
+        late_copy = self._copies(ws_rtc_offer, 2)[1]
+        assert await coordinator._process_websocket_event(late_copy) is False
+        await hass.async_block_till_done()
+
+        assert [event.data["type"] for event in events] == ["ring"]
+        assert EXTERNAL_UNIT_ID in coordinator._answered_modules
+
 
 class TestStatusPushAfterTheCallEnded:
     """On 2026-11-16 a ring answered on the monitor sent the rescind first and
@@ -1486,3 +1504,50 @@ class TestStatusPushWithoutRtcOffer:
 
         assert signals == []
         assert [event["module_id"] for event in events] == [DOORLOCK_ID]
+
+
+class TestSecondaryUnlistedEntrance:
+    """Secondary SCS bus units absent from homesdata route to the sole configured unit."""
+
+    async def test_unlisted_offer_routes_to_sole_external_unit_and_exposes_gateway(
+        self,
+        coordinator: BticinoIntercomCoordinator,
+        ws_rtc_offer: dict,
+    ) -> None:
+        """An offer from an unlisted bus module triggers the sole unit and flags session unlock."""
+        del coordinator.data["modules"][EXTERNAL_UNIT_2_ID]
+        unlisted_id = "d9a63b-a16f-66fa590033e2"
+        offer = {
+            **ws_rtc_offer,
+            "source": "fcm",
+            "extra_params": {
+                **ws_rtc_offer["extra_params"],
+                "data": {
+                    **ws_rtc_offer["extra_params"]["data"],
+                    "session_description": {
+                        **ws_rtc_offer["extra_params"]["data"]["session_description"],
+                        "module_id": unlisted_id,
+                    },
+                },
+            },
+        }
+
+        events = async_capture_events(coordinator.hass, EVENT_CALL)
+        signals: list[tuple] = []
+        with patch(
+            "custom_components.bticino_intercom.coordinator.async_dispatcher_send",
+            side_effect=lambda *args: signals.append(args),
+        ):
+            assert await coordinator._process_websocket_event(offer) is True
+        await coordinator.hass.async_block_till_done()
+
+        assert coordinator.active_call is not None
+        assert coordinator.active_call["module_id"] == EXTERNAL_UNIT_ID
+        assert coordinator.active_call["source_module_id"] == unlisted_id
+        assert coordinator.get_secondary_call_gateway() == (BRIDGE_MAC, unlisted_id)
+        assert (True, EXTERNAL_UNIT_ID) in [(args[2], args[3]) for args in signals]
+        assert events[0].data["source_module_id"] == unlisted_id
+
+        coordinator.clear_active_call(SESSION_ID)
+        assert coordinator.active_call is None
+        assert coordinator.get_secondary_call_gateway() is None

@@ -6,7 +6,7 @@ shape of what comes back is pinned here on purpose.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -164,3 +164,54 @@ async def test_entry_without_a_store_is_skipped(hass, hass_ws_client, seeded_his
         "evt_missed",
         "evt_answered",
     ]
+
+
+async def test_native_call_offer_candidate_and_connected_commands(hass, hass_ws_client, seeded_history) -> None:
+    """Native call answering WS commands proxy offer, candidate, and webrtc_connected."""
+    camera = MagicMock()
+    camera.get_incoming_offer.return_value = {
+        "session_id": "call-1",
+        "sdp": "v=0\r\n",
+        "module_id": "mod_a",
+    }
+    camera.async_on_webrtc_candidate = AsyncMock()
+    camera.async_handle_webrtc_connected = AsyncMock(return_value=True)
+    hass.data[DOMAIN]["entry_main"]["cameras"] = {"camera.front_door": camera}
+
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 10, "type": f"{DOMAIN}/call/offer", "entity_id": "camera.front_door"})
+    offer_reply = await client.receive_json()
+    assert offer_reply["success"]
+    assert offer_reply["result"] == {
+        "has_offer": True,
+        "session_id": "call-1",
+        "sdp": "v=0\r\n",
+        "module_id": "mod_a",
+    }
+
+    await client.send_json(
+        {
+            "id": 11,
+            "type": f"{DOMAIN}/call/candidate",
+            "entity_id": "camera.front_door",
+            "session_id": "call-1",
+            "candidate": {"candidate": "candidate:1", "sdpMLineIndex": 0, "sdpMid": "video0"},
+        }
+    )
+    cand_reply = await client.receive_json()
+    assert cand_reply["success"]
+    camera.async_on_webrtc_candidate.assert_awaited_once()
+
+    await client.send_json(
+        {
+            "id": 12,
+            "type": f"{DOMAIN}/webrtc_connected",
+            "entity_id": "camera.front_door",
+            "session_id": "call-1",
+        }
+    )
+    conn_reply = await client.receive_json()
+    assert conn_reply["success"]
+    assert conn_reply["result"] == {"unmuted": True}
+    camera.async_handle_webrtc_connected.assert_awaited_once_with("call-1")
