@@ -373,6 +373,10 @@ Pull requests are welcome. The project uses:
 
 Code that speaks the Netatmo/BTicino protocol belongs in [pybticino](https://github.com/k-the-hidden-hero/pybticino) rather than here; see [pybticino#31](https://github.com/k-the-hidden-hero/pybticino/issues/31). [CLAUDE.md](CLAUDE.md) has the commands and the device quirks worth knowing before you start.
 
+🌍 **Translations** are written by the maintainer from `strings.json`, so every language follows the English source. Native speakers are welcome to review those pull requests. Translation files sent from outside are not merged.
+
+🚫 **Automated outreach is not tolerated.** Issues and pull requests sent in bulk to many repositories (translation offers, README rewrites, drive-by tweaks) waste the maintainer's time and give the project nothing. They are closed without a reply, and the account may be blocked. What matters is a person guiding the work. A change written with an AI agent is welcome when someone chose it, tested it on their own hardware and answers the review. An agent acting on its own is not.
+
 ---
 
 ## License
