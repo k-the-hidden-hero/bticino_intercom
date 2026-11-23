@@ -1,0 +1,88 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BTicino 帳號憑證",
+        "description": "請輸入您的 Netatmo/BTicino 帳號憑證。",
+        "data": {
+          "username": "使用者名稱（電子郵件）",
+          "password": "密碼"
+        }
+      },
+      "reauth_confirm": {
+        "title": "重新認證 BTicino",
+        "description": "{username} 的憑證已過期，請輸入密碼。",
+        "data": {
+          "password": "密碼"
+        }
+      },
+      "select_home": {
+        "title": "選擇 BTicino 住家",
+        "description": "您的帳號下有多個住家，請選擇要新增的住家。",
+        "data": {
+          "home_id": "住家"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "無法連線至 BTicino/Netatmo API，請檢查網路連線。",
+      "invalid_auth": "使用者名稱、密碼或 API 憑證無效。",
+      "unknown": "發生未知錯誤。"
+    },
+    "abort": {
+      "already_configured": "帳號已經設定完成。",
+      "no_homes_found": "此 BTicino 帳號找不到任何住家。",
+      "reauth_successful": "重新認證成功"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BTicino 選項",
+        "description": "設定 BTicino 整合的運作方式",
+        "data": {
+          "light_as_lock": "將燈光繼電器當作門鎖使用（西班牙安裝方式）",
+          "history_enabled": "儲存通話紀錄（快照與縮圖存於磁碟）",
+          "history_retention_days": "保留期限",
+          "history_max_events": "儲存事件數量上限"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "連線失敗，請稍後再試。"
+    },
+    "error": {
+      "cannot_connect": "連線失敗，請稍後再試。"
+    }
+  },
+  "entity": {
+    "lock": {
+      "external_door": {
+        "name": "外門"
+      },
+      "internal_door": {
+        "name": "內門"
+      }
+    },
+    "binary_sensor": {
+      "call": {
+        "name": "來電"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "最近事件"
+      }
+    },
+    "select": {
+      "do_not_disturb": {
+        "name": "勿擾",
+        "state": {
+          "ringtone_on": "鈴聲開啟",
+          "temporarily_muted": "暫時靜音",
+          "always_muted": "一律靜音"
+        }
+      }
+    }
+  }
+}
