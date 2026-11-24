@@ -340,6 +340,16 @@ def mock_account_voice_only(mock_modules_data_voice_only, mock_events_history) -
     return _build_account(mock_modules_data_voice_only, mock_events_history)
 
 
+@pytest.fixture(autouse=True)
+def mock_fcm_background_listener():
+    """Prevent tests from opening real FCM network connections in background tasks."""
+    with patch(
+        "custom_components.bticino_intercom.fcm.BticinoFcmReceiver.run_forever",
+        new_callable=AsyncMock,
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_websocket_client() -> AsyncMock:
     """Create a persistent mock WebsocketClient."""
@@ -373,11 +383,15 @@ async def _setup_integration(
     if hass.config_entries.async_get_entry(config_entry.entry_id) is None:
         config_entry.add_to_hass(hass)
 
+    mock_fcm_receiver = MagicMock()
+    mock_fcm_receiver.run_forever = AsyncMock()
+
     with (
         patch("custom_components.bticino_intercom.AuthHandler", return_value=mock_auth_handler),
         patch("custom_components.bticino_intercom.AsyncAccount", return_value=mock_account),
         patch("custom_components.bticino_intercom.WebsocketClient", return_value=mock_websocket_client),
         patch("custom_components.bticino_intercom.SignalingClient", return_value=mock_signaling_client),
+        patch("custom_components.bticino_intercom.BticinoFcmReceiver", return_value=mock_fcm_receiver),
         patch("custom_components.bticino_intercom.Store") as mock_store_cls,
         patch("custom_components.bticino_intercom.history.Store") as mock_history_store_cls,
     ):

@@ -34,19 +34,23 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
-from pybticino import AsyncAccount, AuthHandler, SignalingClient, WebsocketClient
+from pybticino import AsyncAccount, AuthHandler, WebsocketClient
 from pybticino.exceptions import ApiError, AuthError, PyBticinoException
 
 from .auth import async_with_auth_retry
 from .const import (
     DOMAIN,
+    ENV_FCM_API_KEY,
+    OPT_FCM_API_KEY,
     PLATFORMS,
     SUBTYPE_EXTERNAL_UNIT,
     TOKEN_STORAGE_VERSION,
 )
 from .coordinator import BticinoIntercomCoordinator
+from .fcm import BticinoFcmReceiver, async_drop_fcm_registration
 from .history import EventHistoryStore, get_history_options
 from .media_source import BticinoHistoryImageView
+from .signaling_compat import BticinoSignalingClient as SignalingClient
 from .utils import get_module_subtype
 from .websocket_api import async_register_websocket_api
 
@@ -60,6 +64,9 @@ RECONNECT_JITTER_RATIO = 0.2  # Avoid reconnecting every client at the same inst
 PUSH_CONNECTION_REFRESH_INTERVAL = 3600  # Move pushes to a new connection with a fresh token every hour
 WEBSOCKET_TASK_KEY = "websocket_connection_task"
 WEBSOCKET_CLIENT_KEY = "websocket_client"
+FCM_TASK_KEY = "fcm_connection_task"
+FCM_RECEIVER_KEY = "fcm_receiver"
+CAMERAS_KEY = "cameras"
 SIGNALING_CLIENT_KEY = "signaling_client"
 ACCOUNT_KEY = "account"
 COORDINATOR_KEY = "coordinator"
@@ -214,6 +221,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_client = _create_push_client(auth_handler, coordinator)
     coordinator.websocket_client = websocket_client
 
+    # Native Android FCM receiver for bridges that deliver *-rtc offers only over FCM
+    # (EasyKit BDIY, Classe 300 EOS BNCX, and Classe 100X16E BNC1 hw 200 / fw 2.03.11).
+    fcm_receiver = BticinoFcmReceiver(
+        hass=hass,
+        entry=entry,
+        auth_handler=auth_handler,
+        message_callback=coordinator._handle_websocket_message,
+    )
+
     # Prepare event history store (images + metadata on disk).
     history_enabled, retention_days, max_events = get_history_options(entry.options)
     history_store: EventHistoryStore | None = None
@@ -230,6 +246,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         COORDINATOR_KEY: coordinator,
         WEBSOCKET_CLIENT_KEY: websocket_client,
+        FCM_RECEIVER_KEY: fcm_receiver,
+        CAMERAS_KEY: {},
         SIGNALING_CLIENT_KEY: signaling_client,
         ACCOUNT_KEY: account,
         HISTORY_KEY: history_store,
@@ -347,6 +365,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Name the call's own session: without an id the signaling client
             # falls back to its most recent one, which may be a live view.
             try:
+                await sig.ensure_ready()
+                sig.set_session_from_push(
+                    session_id=session_id,
+                    tag_id=active_call.get("tag_id", ""),
+                    correlation_id=""
+                    if active_call.get("correlation_id") is None
+                    else str(active_call.get("correlation_id")),
+                    device_id=active_call.get("device_id"),
+                )
                 await sig.send_terminate(session_id=session_id)
             except Exception:
                 _LOGGER.exception("reject_call: failed to send terminate")
@@ -543,6 +570,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Store task in the existing entry_data dictionary
         entry_data[WEBSOCKET_TASK_KEY] = connection_task
 
+        if not entry_data.get(FCM_TASK_KEY):
+            if fcm_receiver.enabled:
+                fcm_task = hass.async_create_background_task(
+                    fcm_receiver.run_forever(),
+                    name=f"{DOMAIN} FCM Receiver - {entry.entry_id}",
+                )
+                entry_data[FCM_TASK_KEY] = fcm_task
+            else:
+                _LOGGER.info(
+                    "Native Android FCM receiver disabled: configure '%s' in integration options "
+                    "or set %s to enable FCM *-rtc push reception.",
+                    OPT_FCM_API_KEY,
+                    ENV_FCM_API_KEY,
+                )
+
     # Schedule the WebSocket start — always deferred to avoid running during setup
     if hass.state == CoreState.running:
         _LOGGER.debug("Home Assistant already running, scheduling WebSocket manager via call_later.")
@@ -583,16 +625,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store the removal function for the start listener
     hass.data[DOMAIN][entry.entry_id][START_LISTENER_REMOVE_KEY] = start_listener_remove
 
-    # Cancel WebSocket task on HA shutdown to prevent blocking
+    # Cancel WebSocket and FCM tasks on HA shutdown to prevent blocking
     async def _async_cancel_websocket_on_stop(event: HAEvent) -> None:
-        """Cancel the WebSocket manager task when HA is stopping."""
+        """Cancel the WebSocket and FCM manager tasks when HA is stopping."""
         entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-        ws_task = entry_data.get(WEBSOCKET_TASK_KEY)
-        if ws_task and not ws_task.done():
-            _LOGGER.debug("Cancelling WebSocket manager task on HA stop.")
-            ws_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await ws_task
+        for task_key in (WEBSOCKET_TASK_KEY, FCM_TASK_KEY):
+            task = entry_data.get(task_key)
+            if task and not task.done():
+                _LOGGER.debug("Cancelling %s on HA stop.", task_key)
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_cancel_websocket_on_stop))
 
@@ -603,18 +646,21 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.info("Unloading BTicino integration entry: %s", entry.entry_id)
 
-    # Stop the WebSocket connection manager task
+    # Stop the WebSocket and FCM connection manager tasks
     if entry_data := hass.data.get(DOMAIN, {}).get(entry.entry_id):
-        websocket_task = entry_data.pop(WEBSOCKET_TASK_KEY, None)
-        if websocket_task:
-            _LOGGER.debug("Cancelling WebSocket manager task during unload.")
-            websocket_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await websocket_task
-            _LOGGER.debug("WebSocket manager task cancelled.")
+        for task_key in (WEBSOCKET_TASK_KEY, FCM_TASK_KEY):
+            task = entry_data.pop(task_key, None)
+            if task:
+                _LOGGER.debug("Cancelling %s during unload.", task_key)
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                _LOGGER.debug("%s cancelled.", task_key)
 
-        # Clean up websocket client (disconnect is handled by task cancellation finally)
+        # Clean up websocket/fcm clients (disconnect is handled by task cancellation finally)
         entry_data.pop(WEBSOCKET_CLIENT_KEY, None)
+        entry_data.pop(FCM_RECEIVER_KEY, None)
+        entry_data.pop(CAMERAS_KEY, None)
 
         # Clean up signaling client
         signaling = entry_data.pop(SIGNALING_CLIENT_KEY, None)
@@ -660,10 +706,25 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Clean up stored tokens and history when an entry is permanently removed."""
+    """Clean up stored tokens, FCM registration, and history when permanently removed."""
     token_store = Store(hass, TOKEN_STORAGE_VERSION, f"{DOMAIN}.tokens.{entry.entry_id}")
+    saved_tokens = await token_store.async_load()
+    auth_handler: AuthHandler | None = None
+    if entry.data.get(CONF_USERNAME) and entry.data.get(CONF_PASSWORD):
+        auth_handler = AuthHandler(
+            username=entry.data[CONF_USERNAME],
+            password=entry.data[CONF_PASSWORD],
+            session=async_get_clientsession(hass),
+        )
+        if isinstance(saved_tokens, dict) and saved_tokens.get("access_token") and saved_tokens.get("refresh_token"):
+            auth_handler.set_tokens(
+                access_token=saved_tokens["access_token"],
+                refresh_token=saved_tokens["refresh_token"],
+                expires_at=saved_tokens.get("expires_at"),
+            )
+    await async_drop_fcm_registration(hass, entry, auth_handler)
     await token_store.async_remove()
     history_store = EventHistoryStore(hass, entry.entry_id)
     await history_store.async_load()
     await history_store.async_clear()
-    _LOGGER.debug("Removed stored tokens and history for entry %s", entry.entry_id)
+    _LOGGER.debug("Removed stored tokens, FCM context, and history for entry %s", entry.entry_id)

@@ -114,7 +114,14 @@ class BticinoLock(BticinoEntity, LockEntity):
         return {k: v for k, v in attrs.items() if v is not None}
 
     async def async_unlock(self, **kwargs: Any) -> None:
-        """Unlock the lock with optimistic state and timer."""
+        """Unlock the lock with optimistic state and timer.
+
+        When an unlisted secondary entrance (e.g. an audio-only condo inner
+        door) is currently ringing or in an active call, sends Netatmo's
+        ``OpenSessionDoorLockAction`` (``lock: False`` directly on the BNC1
+        gateway MAC without a ``bridge`` field) so the indoor monitor unlocks
+        the calling entrance instead of the primary configured gate.
+        """
         if self._relock_canceller:
             self._relock_canceller()
             self._relock_canceller = None
@@ -122,6 +129,22 @@ class BticinoLock(BticinoEntity, LockEntity):
         if not self._bridge_id:
             _LOGGER.error("Bridge ID not found for lock %s", self._module_id)
             return
+
+        target_module_id = self._module_id
+        target_bridge_id: str | None = self._bridge_id
+        secondary = (
+            self.coordinator.get_secondary_call_gateway()
+            if hasattr(self.coordinator, "get_secondary_call_gateway")
+            else None
+        )
+        if secondary is not None:
+            target_module_id, source_mid = secondary
+            target_bridge_id = None
+            _LOGGER.info(
+                "Active call from secondary entrance %s; sending session door unlock to gateway %s",
+                source_mid,
+                target_module_id,
+            )
 
         self._attr_is_locked = False
         self._last_unlocked = datetime.now(UTC).isoformat()
@@ -132,13 +155,13 @@ class BticinoLock(BticinoEntity, LockEntity):
         try:
             await self.coordinator.account.async_set_module_state(
                 home_id=self.coordinator.home_id,
-                module_id=self._module_id,
-                bridge_id=self._bridge_id,
+                module_id=target_module_id,
+                bridge_id=target_bridge_id,
                 state={"lock": False},
                 timezone=self.hass.config.time_zone,
             )
         except Exception as err:
-            _LOGGER.error("Failed to unlock %s: %s", self._module_id, err)
+            _LOGGER.error("Failed to unlock %s: %s", target_module_id, err)
             if self._relock_canceller:
                 self._relock_canceller()
                 self._relock_canceller = None

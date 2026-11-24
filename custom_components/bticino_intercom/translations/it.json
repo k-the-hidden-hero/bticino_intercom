@@ -33,7 +33,8 @@
         "title": "Opzioni Luci BTicino",
         "description": "Configura il comportamento delle tue luci BTicino",
         "data": {
-          "light_as_lock": "Usa il relè dell'illuminazione come serratura (configurazione alternativa)"
+          "light_as_lock": "Usa il relè dell'illuminazione come serratura (configurazione alternativa)",
+          "fcm_api_key": "Chiave API Android Firebase per offerte chiamata FCM (opzionale)"
         }
       }
     },

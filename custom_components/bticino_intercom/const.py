@@ -110,3 +110,5 @@ HISTORY_MAX_MAX_EVENTS = 5000
 OPT_HISTORY_ENABLED = "history_enabled"
 OPT_HISTORY_RETENTION_DAYS = "history_retention_days"
 OPT_HISTORY_MAX_EVENTS = "history_max_events"
+OPT_FCM_API_KEY = "fcm_api_key"
+ENV_FCM_API_KEY = "BTICINO_FCM_API_KEY"

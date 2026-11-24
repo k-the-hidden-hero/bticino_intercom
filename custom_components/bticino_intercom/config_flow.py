@@ -23,6 +23,7 @@ from .const import (
     HISTORY_DEFAULT_RETENTION_DAYS,
     HISTORY_MAX_MAX_EVENTS,
     HISTORY_MAX_RETENTION_DAYS,
+    OPT_FCM_API_KEY,
     OPT_HISTORY_ENABLED,
     OPT_HISTORY_MAX_EVENTS,
     OPT_HISTORY_RETENTION_DAYS,
@@ -66,6 +67,9 @@ STEP_INIT_OPTIONS_SCHEMA = vol.Schema(
                 unit_of_measurement="events",
             ),
         ),
+        vol.Optional(OPT_FCM_API_KEY, default=""): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD),
+        ),
     }
 )
 
@@ -88,7 +92,10 @@ class BticinoOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
-            updated_options = {**self.config_entry.options, **user_input}
+            cleaned_input = dict(user_input)
+            if OPT_FCM_API_KEY in cleaned_input and isinstance(cleaned_input[OPT_FCM_API_KEY], str):
+                cleaned_input[OPT_FCM_API_KEY] = cleaned_input[OPT_FCM_API_KEY].strip()
+            updated_options = {**self.config_entry.options, **cleaned_input}
             return self.async_create_entry(title="", data=updated_options)
 
         current = self.config_entry.options
@@ -125,6 +132,12 @@ class BticinoOptionsFlowHandler(config_entries.OptionsFlow):
                         mode=selector.NumberSelectorMode.BOX,
                         unit_of_measurement="events",
                     ),
+                ),
+                vol.Optional(
+                    OPT_FCM_API_KEY,
+                    default=current.get(OPT_FCM_API_KEY, ""),
+                ): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD),
                 ),
             }
         )
@@ -278,11 +291,13 @@ class BticinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            raw_fcm_key = user_input.get(OPT_FCM_API_KEY, "")
             options_data = {
                 "light_as_lock": user_input.get("light_as_lock", False),
                 OPT_HISTORY_ENABLED: user_input.get(OPT_HISTORY_ENABLED, True),
                 OPT_HISTORY_RETENTION_DAYS: user_input.get(OPT_HISTORY_RETENTION_DAYS, HISTORY_DEFAULT_RETENTION_DAYS),
                 OPT_HISTORY_MAX_EVENTS: user_input.get(OPT_HISTORY_MAX_EVENTS, HISTORY_DEFAULT_MAX_EVENTS),
+                OPT_FCM_API_KEY: raw_fcm_key.strip() if isinstance(raw_fcm_key, str) else "",
             }
             return self.async_create_entry(title=self._config_title, data=self._config_data, options=options_data)
 

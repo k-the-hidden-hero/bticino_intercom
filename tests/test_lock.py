@@ -277,3 +277,56 @@ async def test_light_as_lock_unlock_sends_on(
         state={"on": True},
         timezone=hass.config.time_zone,
     )
+
+
+async def test_lock_unlock_uses_gateway_session_unlock_for_secondary_entrance(
+    hass: HomeAssistant,
+    mock_setup_entry: MockConfigEntry,
+    mock_account: AsyncMock,
+) -> None:
+    """During a call from an unlisted secondary entrance, unlock targets the gateway."""
+    coordinator = _get_coordinator(hass, mock_setup_entry)
+    entity_id = next(s for s in hass.states.async_entity_ids(LOCK_DOMAIN) if "light_as_lock" not in s)
+
+    coordinator._active_call = {
+        "session_id": "secondary-sess-1",
+        "device_id": BRIDGE_MAC,
+        "module_id": "d9a63b-a06f-2ef633a2f733",
+        "source_module_id": "d9a63b-a16f-unlisted",
+    }
+
+    await hass.services.async_call(
+        LOCK_DOMAIN,
+        "open",
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    mock_account.async_set_module_state.assert_called_once_with(
+        home_id=mock_setup_entry.data["home_id"],
+        module_id=BRIDGE_MAC,
+        bridge_id=None,
+        state={"lock": False},
+        timezone=hass.config.time_zone,
+    )
+
+    # After the secondary call ends, unlocking returns to the primary BNDL module.
+    mock_account.async_set_module_state.reset_mock()
+    coordinator.clear_active_call("secondary-sess-1")
+
+    await hass.services.async_call(
+        LOCK_DOMAIN,
+        "open",
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    mock_account.async_set_module_state.assert_called_once_with(
+        home_id=mock_setup_entry.data["home_id"],
+        module_id=LOCK_MODULE_ID,
+        bridge_id=BRIDGE_MAC,
+        state={"lock": False},
+        timezone=hass.config.time_zone,
+    )
