@@ -570,6 +570,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Home Assistant starting, scheduling WebSocket manager via listener.")
 
         async def _start_after_ha_start(event: HAEvent) -> None:
+            # The listener is spent the moment it fires. Forget its remover, or
+            # unloading the entry later - any reload after a restart - asks HA
+            # to remove a listener it no longer has, which HA logs at ERROR as
+            # "Unable to remove unknown job listener".
+            entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+            if entry_data is not None:
+                entry_data[START_LISTENER_REMOVE_KEY] = None
             # Route through _deferred_start_websocket so we wait for the entry to
             # reach LOADED before starting, exactly like the already-running path.
             # Otherwise the manager could start while the entry is still
@@ -623,7 +630,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         entry_data.pop(ACCOUNT_KEY, None)
 
-        # Clean up start listener if it exists
+        # Remove the start listener if HA has not started yet. Once it has, the
+        # listener has fired and _start_after_ha_start has cleared this key.
         start_listener_remove = entry_data.pop(START_LISTENER_REMOVE_KEY, None)
         if start_listener_remove:
             _LOGGER.debug("Removing HA start listener during unload.")

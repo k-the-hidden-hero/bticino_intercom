@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_START
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import entity_registry as er
 from pybticino.exceptions import ApiError, AuthError
@@ -371,6 +372,79 @@ async def test_unload_entry(
     assert mock_setup_entry.state is ConfigEntryState.NOT_LOADED
     # Domain data should be cleaned up
     assert mock_setup_entry.entry_id not in hass.data.get(DOMAIN, {})
+
+
+async def test_reload_after_start_leaves_the_spent_listener_alone(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An entry set up while HA starts can be reloaded without a core error.
+
+    Set up before HA has started, the entry waits for EVENT_HOMEASSISTANT_START
+    with a one-time listener. Once that event fires the listener is gone, so
+    unloading the entry afterwards - any reload after a restart - must not ask
+    HA to remove it again: HA logs that as "Unable to remove unknown job
+    listener" with a traceback, at ERROR.
+    """
+    hass.set_state(CoreState.not_running)
+    await _setup_integration(
+        hass,
+        mock_config_entry,
+        mock_auth_handler,
+        mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_START)
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+    assert "Unable to remove unknown job listener" not in caplog.text
+
+
+async def test_unload_before_start_removes_the_waiting_listener(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_auth_handler: AsyncMock,
+    mock_account: AsyncMock,
+    mock_websocket_client: AsyncMock,
+    mock_signaling_client: AsyncMock,
+) -> None:
+    """An entry unloaded before HA has started takes its start listener with it.
+
+    Otherwise EVENT_HOMEASSISTANT_START would still start the push connection
+    of an entry that is no longer loaded.
+    """
+    hass.set_state(CoreState.not_running)
+    await _setup_integration(
+        hass,
+        mock_config_entry,
+        mock_auth_handler,
+        mock_account,
+        mock_websocket_client,
+        mock_signaling_client,
+    )
+
+    with patch("custom_components.bticino_intercom._deferred_start_websocket", AsyncMock()) as deferred:
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        hass.set_state(CoreState.running)
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_START)
+        await hass.async_block_till_done()
+
+    deferred.assert_not_awaited()
 
 
 async def test_coordinator_has_data_after_setup(
